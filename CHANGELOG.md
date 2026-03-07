@@ -2,6 +2,23 @@
 
 <!-- markdownlint-disable MD024 -->
 
+## [2.53.0](https://github.com/g0ldyy/comet/compare/v2.52.0...v2.53.0) (2026-03-07)
+
+
+### Features
+
+* add live preview for result format selection in the UI ([5394a40](https://github.com/g0ldyy/comet/commit/5394a40777d864b281c0ec112ca3989038e66e7f))
+* add live preview for result format selection in the UI ([8d5ef18](https://github.com/g0ldyy/comet/commit/8d5ef18843947a49e003add3f142c09a27eba4e9))
+* enhance URL handling in scrapers with context-aware parsing ([8546296](https://github.com/g0ldyy/comet/commit/8546296d3394df2a8c84679dc1bb6513002567c9))
+
+
+### Bug Fixes
+
+* don't use DOMContentLoaded as it isn't needed ([a30637c](https://github.com/g0ldyy/comet/commit/a30637c6025f11f2ec3b98b2e6732fd342f125aa))
+* don't use DOMContentLoaded as it isn't needed ([15d405e](https://github.com/g0ldyy/comet/commit/15d405efdff7627ea710910672f866eaf677096a))
+* import gunicorn in run_with_gunicorn function to fix windows issues ([7f89f7a](https://github.com/g0ldyy/comet/commit/7f89f7a1ee2c09dcfc8f0dcb2799de060ffd365b))
+* import gunicorn in run_with_gunicorn function to fix windows issues ([cecb61e](https://github.com/g0ldyy/comet/commit/cecb61e8d85c5387f4ae6a46a4aec0831dd7e17c))
+
 ## [2.52.0](https://github.com/g0ldyy/comet/compare/v2.51.0...v2.52.0) (2026-02-19)
 
 
