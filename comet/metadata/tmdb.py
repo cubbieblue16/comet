@@ -79,6 +79,48 @@ class TMDBApi:
             logger.error(f"TMDB: Error converting IMDB ID {imdb_id}: {e}")
             return None
 
+    async def get_season_episodes(self, tmdb_id: str, season: int) -> dict[str, int]:
+        """Fetch all episodes for a season and return a mapping of air_date -> episode_number.
+
+        Returns: {"2026-01-05": 9, "2026-01-06": 10, ...}
+        """
+        try:
+            url = f"{self.base_url}/tv/{tmdb_id}/season/{season}"
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status != 200:
+                    return {}
+
+                data = await response.json()
+
+            date_to_episode = {}
+            for ep in data.get("episodes", []):
+                air_date = ep.get("air_date")
+                ep_number = ep.get("episode_number")
+                if air_date and ep_number is not None:
+                    date_to_episode[air_date] = ep_number
+            return date_to_episode
+        except Exception as e:
+            logger.error(f"TMDB: Error getting season episodes for {tmdb_id} S{season}: {e}")
+            return {}
+
+    async def get_seasons_for_show(self, tmdb_id: str) -> list[dict]:
+        """Fetch the list of seasons for a show with their air dates.
+
+        Returns: [{"season_number": 1, "air_date": "2024-01-01"}, ...]
+        """
+        try:
+            url = f"{self.base_url}/tv/{tmdb_id}"
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status != 200:
+                    return []
+
+                data = await response.json()
+
+            return data.get("seasons", [])
+        except Exception as e:
+            logger.error(f"TMDB: Error getting seasons for {tmdb_id}: {e}")
+            return []
+
     async def has_watch_providers(self, tmdb_id: str):
         try:
             url = f"{self.base_url}/movie/{tmdb_id}/watch/providers"
