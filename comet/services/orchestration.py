@@ -35,6 +35,7 @@ class TorrentManager:
         search_episode: int | None = None,
         search_season: int | None = None,
         cache_media_ids: list[str] | None = None,
+        date_resolver=None,
     ):
         self.media_type = media_type
         self.media_id = media_full_id
@@ -55,6 +56,8 @@ class TorrentManager:
         self.cache_media_ids = normalize_cache_media_ids(
             self.media_only_id, cache_media_ids
         )
+
+        self.date_resolver = date_resolver
 
         self.seen_hashes = set()
         self.torrents = {}
@@ -177,6 +180,18 @@ class TorrentManager:
                 episode = None
             else:
                 episode = parsed_episodes[0]
+
+            # Date-based resolution fallback
+            if episode is None and self.date_resolver and self.media_type == "series":
+                resolved_season, resolved_episode = await self.date_resolver.resolve(
+                    self.media_only_id,
+                    torrent["title"],
+                    search_season=self.search_season,
+                )
+                if resolved_season is not None and resolved_episode is not None:
+                    episode = resolved_episode
+                    if not parsed_seasons:
+                        cache_seasons = [resolved_season]
 
             for season in cache_seasons:
                 file_info = {

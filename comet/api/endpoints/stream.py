@@ -18,6 +18,7 @@ from comet.services.debrid_account_scraper import (
     ensure_account_snapshot_ready, get_account_torrents_for_media,
     ingest_account_torrents_to_public_cache, schedule_account_snapshot_refresh)
 from comet.services.lock import DistributedLock
+from comet.services.date_episode_resolver import DateEpisodeResolver
 from comet.services.orchestration import TorrentManager
 from comet.services.trackers import trackers
 from comet.utils.cache import (CachedJSONResponse, CachePolicies,
@@ -550,6 +551,7 @@ async def stream(
                 cache_media_ids.append(kitsu_id)
 
     remove_adult_content = settings.REMOVE_ADULT_CONTENT and config["removeTrash"]
+    date_resolver = DateEpisodeResolver(session) if media_type == "series" else None
     torrent_manager = TorrentManager(
         media_type,
         media_id,
@@ -565,6 +567,7 @@ async def stream(
         search_episode=search_episode,
         search_season=search_season,
         cache_media_ids=cache_media_ids,
+        date_resolver=date_resolver,
     )
 
     await torrent_manager.get_cached_torrents()
