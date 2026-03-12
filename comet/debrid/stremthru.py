@@ -420,6 +420,15 @@ class StremThru:
                 file_season = parsed.seasons[0] if parsed.seasons else None
                 file_episode = parsed.episodes[0] if parsed.episodes else None
 
+                # Date-based resolution fallback for scoring
+                if (file_season is None or file_episode is None) and self.date_resolver:
+                    resolved_season, resolved_episode = await self.date_resolver.resolve(
+                        self.media_only_id, filename, search_season=season
+                    )
+                    if resolved_season is not None and resolved_episode is not None:
+                        file_season = resolved_season
+                        file_episode = resolved_episode
+
                 # Calculate score
                 score = 0
                 match_reason = []
