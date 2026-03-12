@@ -2,6 +2,8 @@ import hashlib
 
 import aiohttp
 
+from comet.services.date_episode_resolver import DateEpisodeResolver
+
 from .stremthru import StremThru
 
 debrid_services = {
@@ -75,12 +77,14 @@ def get_debrid(
     ip: str,
 ):
     if debrid_service != "torrent":
+        date_resolver = DateEpisodeResolver(session)
         return StremThru(
             session,
             video_id,
             media_only_id,
             build_stremthru_token(debrid_service, debrid_api_key),
             ip,
+            date_resolver=date_resolver,
         )
 
 

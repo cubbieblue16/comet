@@ -35,6 +35,7 @@ class StremThru:
         media_only_id: str,
         token: str,
         ip: str,
+        date_resolver=None,
     ):
         store, token = self.parse_store_creds(token)
 
@@ -45,6 +46,7 @@ class StremThru:
         self.client_ip = ip
         self.sid = video_id
         self.media_only_id = media_only_id
+        self.date_resolver = date_resolver
 
     def parse_store_creds(self, token: str):
         if ":" in token:
@@ -263,7 +265,25 @@ class StremThru:
                             if filename_parsed.episodes
                             else None
                         )
-                        if ":" in self.sid and (season is None or episode is None):
+
+                        # Date-based episode resolution fallback
+                        if (
+                            self.sid is not None
+                            and ":" in self.sid
+                            and (season is None or episode is None)
+                            and self.date_resolver
+                        ):
+                            parts = self.sid.split(":")
+                            imdb_id = parts[0]
+                            search_season = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                            resolved_season, resolved_episode = await self.date_resolver.resolve(
+                                imdb_id, filename, search_season=search_season
+                            )
+                            if resolved_season is not None and resolved_episode is not None:
+                                season = resolved_season
+                                episode = resolved_episode
+
+                        if self.sid is not None and ":" in self.sid and (season is None or episode is None):
                             continue
 
                         index = file["index"] if file["index"] != -1 else None
