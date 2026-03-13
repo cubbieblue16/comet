@@ -1,4 +1,5 @@
 from collections import OrderedDict, defaultdict
+from datetime import date as _date
 from threading import Event, Lock
 
 from pydantic import ValidationError
@@ -263,6 +264,26 @@ def filter_worker(
 
                 _log_exclusion(
                     f"📅 Rejected (Year Mismatch) | {torrent_title} | Year: {parsed.year} | Expected: {expected}"
+                )
+                continue
+
+        # Reboot/revival protection: a brand-new series can't have physical
+        # media releases yet.  When the torrent has no year in its filename
+        # and the metadata year is recent, reject BluRay/DVD/BDRip quality.
+        if (
+            year
+            and not parsed.year
+            and not year_end
+            and media_type == "series"
+            and year >= _date.today().year - 1
+        ):
+            quality_lower = str(parsed.quality).lower() if parsed.quality else ""
+            if any(
+                q in quality_lower
+                for q in ("bluray", "bdrip", "remux", "dvdrip", "dvd")
+            ):
+                _log_exclusion(
+                    f"📅 Rejected (Physical Media for New Show) | {torrent_title} | Quality: {parsed.quality} | Show Year: {year}"
                 )
                 continue
 
