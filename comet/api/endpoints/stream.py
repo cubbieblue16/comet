@@ -551,7 +551,7 @@ async def stream(
                 cache_media_ids.append(kitsu_id)
 
     remove_adult_content = settings.REMOVE_ADULT_CONTENT and config["removeTrash"]
-    date_resolver = DateEpisodeResolver(session) if media_type == "series" else None
+    date_resolver = DateEpisodeResolver(session)
     torrent_manager = TorrentManager(
         media_type,
         media_id,

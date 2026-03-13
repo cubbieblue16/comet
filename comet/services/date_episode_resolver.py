@@ -29,8 +29,13 @@ class DateEpisodeResolver:
         imdb_id: str,
         title: str,
         search_season: int | None = None,
+        fallback: bool = True,
     ) -> tuple[int | None, int | None]:
         """Attempt to resolve a date-based torrent title to (season, episode).
+
+        If fallback=False, only checks the search_season directly (fast path
+        for availability/download link). If fallback=True (default), searches
+        other seasons when the date isn't found in search_season.
 
         Returns (season, episode) if resolved, or (None, None) if not.
         """
@@ -54,6 +59,9 @@ class DateEpisodeResolver:
                     f"Date resolver: mapped {date_str} -> S{search_season:02d}E{ep:02d} for {imdb_id}",
                 )
                 return search_season, ep
+
+        if not fallback:
+            return None, None
 
         # If season unknown or not found in the given season, search by year
         seasons = await self._get_seasons_list(tmdb_id)
