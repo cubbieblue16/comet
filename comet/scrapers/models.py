@@ -12,6 +12,7 @@ class ScrapeRequest(BaseModel):
     year_end: Optional[int] = None
     season: Optional[int] = None
     episode: Optional[int] = None
+    air_date: Optional[str] = None  # ISO date (e.g. "2025-01-06") for date-based searches
     context: str = "live"  # "live" or "background"
 
 

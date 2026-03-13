@@ -68,6 +68,18 @@ class TorrentManager:
     async def scrape_torrents(
         self,
     ):
+        # Look up air date for date-based scraper queries
+        air_date = None
+        if (
+            self.date_resolver
+            and self.media_only_id
+            and self.search_season is not None
+            and self.search_episode is not None
+        ):
+            air_date = await self.date_resolver.get_air_date(
+                self.media_only_id, self.search_season, self.search_episode
+            )
+
         request = ScrapeRequest(
             media_type=self.media_type,
             media_id=self.media_id,
@@ -77,6 +89,7 @@ class TorrentManager:
             year_end=self.year_end,
             season=self.search_season,
             episode=self.search_episode,
+            air_date=air_date,
             context=self.context,
         )
 

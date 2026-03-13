@@ -121,6 +121,10 @@ class JackettScraper(BaseScraper):
                 f"{request.title} S{request.season:02d}E{request.episode:02d}"
             )
 
+        # Date-based query for shows that use dates instead of S##E##
+        if request.air_date:
+            queries.append(f"{request.title} {request.air_date.replace('-', '.')}")
+
         try:
             tasks = []
             for query in queries:

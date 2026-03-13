@@ -97,6 +97,34 @@ class DateEpisodeResolver:
             logger.error(f"DateResolver: Error resolving {date_str} for {imdb_id}: {e}")
             return None, None
 
+    async def get_air_date(
+        self, imdb_id: str, season: int, episode: int
+    ) -> str | None:
+        """Look up the air date for a specific episode via TMDB.
+
+        Returns an ISO date string (e.g. "2025-01-06") or None.
+        """
+        try:
+            if not imdb_id or season is None or episode is None:
+                return None
+
+            tmdb_id = await self._get_tmdb_id(imdb_id)
+            if tmdb_id is None:
+                return None
+
+            # Use the cached season date map (reverse lookup)
+            date_map = await self._get_season_date_map(tmdb_id, season)
+            for date_str, ep_num in date_map.items():
+                if ep_num == episode:
+                    return date_str
+
+            return None
+        except Exception as e:
+            logger.error(
+                f"DateResolver: Error getting air date for {imdb_id} S{season}E{episode}: {e}"
+            )
+            return None
+
     async def _get_tmdb_id(self, imdb_id: str) -> str | None:
         """Look up TMDB ID from IMDb ID, with DB-backed caching."""
         row = await database.fetch_one(
