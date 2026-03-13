@@ -267,9 +267,9 @@ def filter_worker(
                 )
                 continue
 
-        # Reboot/revival protection: a brand-new series can't have physical
-        # media releases yet.  When the torrent has no year in its filename
-        # and the metadata year is recent, reject BluRay/DVD/BDRip quality.
+        # Reboot/revival protection: for a brand-new series, require the
+        # year in the torrent filename.  Without it, there is no way to
+        # distinguish old same-named shows (e.g. Scrubs 2001 vs 2026).
         if (
             year
             and not parsed.year
@@ -277,15 +277,10 @@ def filter_worker(
             and media_type == "series"
             and year >= _date.today().year - 1
         ):
-            quality_lower = str(parsed.quality).lower() if parsed.quality else ""
-            if any(
-                q in quality_lower
-                for q in ("bluray", "bdrip", "remux", "dvdrip", "dvd")
-            ):
-                _log_exclusion(
-                    f"📅 Rejected (Physical Media for New Show) | {torrent_title} | Quality: {parsed.quality} | Show Year: {year}"
-                )
-                continue
+            _log_exclusion(
+                f"📅 Rejected (No Year for New Show) | {torrent_title} | Show Year: {year}"
+            )
+            continue
 
         torrent["parsed"] = parsed
         results.append(torrent)
