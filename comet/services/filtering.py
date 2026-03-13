@@ -208,11 +208,8 @@ def filter_worker(
         if year_end:
             min_year = year
             max_year = year_end
-        elif media_type == "series":
-            min_year = year - 1
         else:
             min_year = year - 1
-            max_year = year + 1
 
     for torrent in torrents:
         torrent_title = torrent["title"]
@@ -261,10 +258,8 @@ def filter_worker(
             if not (min_year <= parsed.year <= max_year):
                 if year_end:
                     expected = f"{year}-{year_end}"
-                elif media_type == "series":
-                    expected = f">{year}"
                 else:
-                    expected = f"~{year}"
+                    expected = f">={min_year}"
 
                 _log_exclusion(
                     f"📅 Rejected (Year Mismatch) | {torrent_title} | Year: {parsed.year} | Expected: {expected}"
