@@ -538,6 +538,19 @@ async def setup_database():
 
         await database.execute(
             """
+                CREATE TABLE IF NOT EXISTS date_episode_cache (
+                    cache_key TEXT NOT NULL,
+                    cache_type TEXT NOT NULL,
+                    tmdb_id TEXT,
+                    data TEXT,
+                    timestamp INTEGER,
+                    PRIMARY KEY (cache_key, cache_type)
+                )
+            """
+        )
+
+        await database.execute(
+            """
                 CREATE TABLE IF NOT EXISTS dmm_entries (
                     info_hash TEXT PRIMARY KEY,
                     filename TEXT,
@@ -887,6 +900,17 @@ async def _run_startup_cleanup():
             await database.execute(
                 """
                 DELETE FROM digital_release_cache
+                WHERE timestamp < CAST(:current_time AS BIGINT) - CAST(:cache_ttl AS BIGINT);
+                """,
+                {
+                    "cache_ttl": settings.METADATA_CACHE_TTL,
+                    "current_time": current_time,
+                },
+            )
+
+            await database.execute(
+                """
+                DELETE FROM date_episode_cache
                 WHERE timestamp < CAST(:current_time AS BIGINT) - CAST(:cache_ttl AS BIGINT);
                 """,
                 {

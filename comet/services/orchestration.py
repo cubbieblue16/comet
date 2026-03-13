@@ -185,7 +185,7 @@ class TorrentManager:
             if episode is None and self.date_resolver:
                 resolved_season, resolved_episode = await self.date_resolver.resolve(
                     self.media_only_id,
-                    torrent["title"],
+                    torrent["parsed"].date,
                     search_season=self.search_season,
                 )
                 if resolved_season is not None and resolved_episode is not None:

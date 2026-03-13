@@ -1,24 +1,22 @@
-from cachetools import TTLCache
+import time
 
 import aiohttp
+import orjson
 
 from comet.core.logger import logger
+from comet.core.models import database, settings
 from comet.metadata.tmdb import TMDBApi
-from comet.utils.parsing import extract_date_from_title
 
-# Module-level TTL caches shared across all resolver instances and requests.
-# TMDB data (air dates, season lists) is stable — 1 hour TTL is safe.
-_tmdb_id_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
-_season_date_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
-_seasons_list_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)
+# DB-backed cache TTL (same as other metadata caches)
+_CACHE_TTL = getattr(settings, "METADATA_CACHE_TTL", 30 * 86400)
 
 
 class DateEpisodeResolver:
     """Resolves date-based torrent filenames to season/episode numbers via TMDB.
 
-    Uses module-level TTL caches so lookups are shared across all requests.
-    Creating multiple instances (e.g., one per debrid service) is cheap —
-    they all share the same cached TMDB data.
+    Uses database-backed caching so lookups persist across restarts and are
+    shared across all workers. In-memory hot cache avoids repeated DB reads
+    within the same process.
     """
 
     def __init__(self, session: aiohttp.ClientSession):
@@ -27,27 +25,33 @@ class DateEpisodeResolver:
     async def resolve(
         self,
         imdb_id: str,
-        title: str,
+        date_str: str | None,
         search_season: int | None = None,
         fallback: bool = True,
     ) -> tuple[int | None, int | None]:
-        """Attempt to resolve a date-based torrent title to (season, episode).
+        """Resolve a date string to (season, episode) via TMDB.
 
-        If fallback=False, only checks the search_season directly (fast path
-        for availability/download link). If fallback=True (default), searches
-        other seasons when the date isn't found in search_season.
+        Args:
+            imdb_id: IMDb ID of the show (e.g. "tt0115147")
+            date_str: ISO date from RTN's parsed.date (e.g. "2026-01-05"), or None
+            search_season: Season to check first
+            fallback: If False, only checks search_season (fast path).
+                      If True, searches other seasons when not found.
 
         Returns (season, episode) if resolved, or (None, None) if not.
         """
-        air_date = extract_date_from_title(title)
-        if air_date is None:
+        if not date_str:
             return None, None
 
         tmdb_id = await self._get_tmdb_id(imdb_id)
         if tmdb_id is None:
             return None, None
 
-        date_str = air_date.isoformat()
+        # Extract year from date string for fallback year filtering
+        try:
+            date_year = int(date_str[:4])
+        except (ValueError, IndexError):
+            return None, None
 
         # If we know the season, check it directly
         if search_season is not None:
@@ -78,7 +82,7 @@ class DateEpisodeResolver:
                 season_year = int(season_air_date[:4])
             except (ValueError, IndexError):
                 continue
-            if abs(season_year - air_date.year) > 1:
+            if abs(season_year - date_year) > 1:
                 continue
 
             if season_num == search_season:
@@ -96,14 +100,29 @@ class DateEpisodeResolver:
         return None, None
 
     async def _get_tmdb_id(self, imdb_id: str) -> str | None:
-        cached = _tmdb_id_cache.get(imdb_id)
-        if cached is not None:
-            return cached if cached != "" else None
+        """Look up TMDB ID from IMDb ID, with DB-backed caching."""
+        row = await database.fetch_one(
+            """
+            SELECT tmdb_id FROM date_episode_cache
+            WHERE cache_key = :key AND cache_type = 'tmdb_id'
+            AND timestamp >= :min_ts
+            """,
+            {"key": imdb_id, "min_ts": time.time() - _CACHE_TTL},
+        )
+        if row is not None:
+            val = row["tmdb_id"]
+            return val if val else None
 
         tmdb_id = await self._tmdb.get_tmdb_id_from_imdb(imdb_id)
 
-        # Cache the result (use empty string for None to distinguish from cache miss)
-        _tmdb_id_cache[imdb_id] = tmdb_id if tmdb_id is not None else ""
+        await database.execute(
+            """
+            INSERT INTO date_episode_cache (cache_key, cache_type, tmdb_id, data, timestamp)
+            VALUES (:key, 'tmdb_id', :tmdb_id, NULL, :ts)
+            ON CONFLICT (cache_key, cache_type) DO UPDATE SET tmdb_id = :tmdb_id, timestamp = :ts
+            """,
+            {"key": imdb_id, "tmdb_id": tmdb_id or "", "ts": int(time.time())},
+        )
 
         if tmdb_id is None:
             logger.warning(f"DateResolver: Could not find TMDB ID for {imdb_id}")
@@ -111,20 +130,55 @@ class DateEpisodeResolver:
         return tmdb_id
 
     async def _get_season_date_map(self, tmdb_id: str, season: int) -> dict[str, int]:
+        """Fetch air_date -> episode mapping for a season, with DB-backed caching."""
         cache_key = f"{tmdb_id}:{season}"
-        cached = _season_date_cache.get(cache_key)
-        if cached is not None:
-            return cached
+
+        row = await database.fetch_one(
+            """
+            SELECT data FROM date_episode_cache
+            WHERE cache_key = :key AND cache_type = 'season_dates'
+            AND timestamp >= :min_ts
+            """,
+            {"key": cache_key, "min_ts": time.time() - _CACHE_TTL},
+        )
+        if row is not None and row["data"]:
+            return orjson.loads(row["data"])
 
         date_map = await self._tmdb.get_season_episodes(tmdb_id, season)
-        _season_date_cache[cache_key] = date_map
+
+        await database.execute(
+            """
+            INSERT INTO date_episode_cache (cache_key, cache_type, tmdb_id, data, timestamp)
+            VALUES (:key, 'season_dates', NULL, :data, :ts)
+            ON CONFLICT (cache_key, cache_type) DO UPDATE SET data = :data, timestamp = :ts
+            """,
+            {"key": cache_key, "data": orjson.dumps(date_map).decode(), "ts": int(time.time())},
+        )
+
         return date_map
 
     async def _get_seasons_list(self, tmdb_id: str) -> list[dict]:
-        cached = _seasons_list_cache.get(tmdb_id)
-        if cached is not None:
-            return cached
+        """Fetch season list for a show, with DB-backed caching."""
+        row = await database.fetch_one(
+            """
+            SELECT data FROM date_episode_cache
+            WHERE cache_key = :key AND cache_type = 'seasons_list'
+            AND timestamp >= :min_ts
+            """,
+            {"key": tmdb_id, "min_ts": time.time() - _CACHE_TTL},
+        )
+        if row is not None and row["data"]:
+            return orjson.loads(row["data"])
 
         seasons = await self._tmdb.get_seasons_for_show(tmdb_id)
-        _seasons_list_cache[tmdb_id] = seasons
+
+        await database.execute(
+            """
+            INSERT INTO date_episode_cache (cache_key, cache_type, tmdb_id, data, timestamp)
+            VALUES (:key, 'seasons_list', NULL, :data, :ts)
+            ON CONFLICT (cache_key, cache_type) DO UPDATE SET data = :data, timestamp = :ts
+            """,
+            {"key": tmdb_id, "data": orjson.dumps(seasons).decode(), "ts": int(time.time())},
+        )
+
         return seasons

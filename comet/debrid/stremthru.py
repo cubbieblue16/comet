@@ -277,7 +277,7 @@ class StremThru:
                             imdb_id = parts[0]
                             search_season = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                             resolved_season, resolved_episode = await self.date_resolver.resolve(
-                                imdb_id, filename, search_season=search_season, fallback=False
+                                imdb_id, filename_parsed.date, search_season=search_season, fallback=False
                             )
                             if resolved_season is not None and resolved_episode is not None:
                                 season = resolved_season
@@ -423,7 +423,7 @@ class StremThru:
                 # Date-based resolution fallback for scoring
                 if (file_season is None or file_episode is None) and self.date_resolver:
                     resolved_season, resolved_episode = await self.date_resolver.resolve(
-                        self.media_only_id, filename, search_season=season, fallback=False
+                        self.media_only_id, parsed.date, search_season=season, fallback=False
                     )
                     if resolved_season is not None and resolved_episode is not None:
                         file_season = resolved_season

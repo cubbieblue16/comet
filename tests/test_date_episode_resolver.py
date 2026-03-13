@@ -1,4 +1,3 @@
-import datetime
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -87,7 +86,7 @@ async def test_resolver_resolves_date_to_episode():
         }):
             season, episode = await resolver.resolve(
                 "tt0115147",
-                "The.Daily.Show.2026.01.05.Mark.Kelly.720p.WEB.h264-EDITH",
+                "2026-01-05",
                 search_season=31,
             )
             assert season == 31
@@ -95,7 +94,7 @@ async def test_resolver_resolves_date_to_episode():
 
 
 @pytest.mark.asyncio
-async def test_resolver_returns_none_when_no_date_in_title():
+async def test_resolver_returns_none_when_no_date():
     from comet.services.date_episode_resolver import DateEpisodeResolver
 
     mock_session = MagicMock()
@@ -103,7 +102,7 @@ async def test_resolver_returns_none_when_no_date_in_title():
 
     season, episode = await resolver.resolve(
         "tt0115147",
-        "Breaking.Bad.S05E16.Felina.1080p.BluRay",
+        None,
         search_season=5,
     )
     assert season is None
@@ -123,41 +122,35 @@ async def test_resolver_returns_none_when_date_not_found_in_schedule():
         }):
             season, episode = await resolver.resolve(
                 "tt0115147",
-                "The.Daily.Show.2026.01.05.Mark.Kelly.720p.WEB.h264-EDITH",
+                "2026-01-05",
                 search_season=31,
+                fallback=False,
             )
             assert season is None
             assert episode is None
 
 
 @pytest.mark.asyncio
-async def test_resolver_caches_tmdb_lookups():
-    """TMDB lookups should be cached so multiple calls for the same show+season don't re-fetch."""
-    from comet.services.date_episode_resolver import DateEpisodeResolver, _tmdb_id_cache, _season_date_cache
-
-    # Clear module-level caches to avoid interference from other tests
-    _tmdb_id_cache.clear()
-    _season_date_cache.clear()
+async def test_resolver_fallback_false_skips_other_seasons():
+    """With fallback=False, resolver should NOT search other seasons."""
+    from comet.services.date_episode_resolver import DateEpisodeResolver
 
     mock_session = MagicMock()
     resolver = DateEpisodeResolver(mock_session)
 
-    date_map = {"2026-01-05": 9, "2026-01-06": 10}
-
-    # Patch the TMDB API methods (not the resolver's cache methods) to test caching
-    with patch.object(resolver._tmdb, 'get_tmdb_id_from_imdb', new_callable=AsyncMock, return_value="12345") as mock_tmdb_api:
-        with patch.object(resolver._tmdb, 'get_season_episodes', new_callable=AsyncMock, return_value=date_map) as mock_season_api:
-            await resolver.resolve("tt0115147", "The.Daily.Show.2026.01.05.Title.720p", search_season=31)
-            await resolver.resolve("tt0115147", "The.Daily.Show.2026.01.06.Title.720p", search_season=31)
-
-            # TMDB API should be called once (cached by resolver)
-            assert mock_tmdb_api.call_count == 1
-            # Season episodes API should be called once (cached by resolver)
-            assert mock_season_api.call_count == 1
-
-    # Clean up
-    _tmdb_id_cache.clear()
-    _season_date_cache.clear()
+    with patch.object(resolver, '_get_tmdb_id', new_callable=AsyncMock, return_value="12345"):
+        with patch.object(resolver, '_get_season_date_map', new_callable=AsyncMock, return_value={}):
+            with patch.object(resolver, '_get_seasons_list', new_callable=AsyncMock) as mock_seasons:
+                season, episode = await resolver.resolve(
+                    "tt0115147",
+                    "2026-01-05",
+                    search_season=31,
+                    fallback=False,
+                )
+                assert season is None
+                assert episode is None
+                # Should NOT have called _get_seasons_list
+                mock_seasons.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -183,7 +176,7 @@ async def test_resolver_season_fallback_includes_season_zero():
                 ]
                 season, episode = await resolver.resolve(
                     "tt9999999",
-                    "WWE.WrestleMania.40.2024.04.06.720p",
+                    "2024-04-06",
                     search_season=1,
                 )
                 assert season == 0

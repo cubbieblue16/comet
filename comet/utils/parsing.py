@@ -1,5 +1,3 @@
-import datetime
-import re
 from functools import lru_cache
 
 from RTN import ParsedData
@@ -162,30 +160,3 @@ def associate_urls_credentials(urls, credentials):
                     credentials_list.append(None)
 
     return list(zip(urls, credentials_list))
-
-
-# Date patterns for daily/talk show torrent names
-# Priority order: YYYY.MM.DD (most common), YYYY-MM-DD, YYYYMMDD
-_DATE_PATTERNS = [
-    re.compile(r'(?<!\d)(\d{4})\.(\d{2})\.(\d{2})(?!\d)'),   # YYYY.MM.DD
-    re.compile(r'(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)'),     # YYYY-MM-DD
-    re.compile(r'(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)'),       # YYYYMMDD
-]
-
-
-def extract_date_from_title(title: str) -> datetime.date | None:
-    """Extract a broadcast date from a torrent title.
-
-    Returns a date if a valid YYYY.MM.DD, YYYY-MM-DD, or YYYYMMDD pattern
-    is found. Returns None if no date is found or the date is invalid.
-    Only matches full dates (month+day), not standalone years.
-    """
-    for pattern in _DATE_PATTERNS:
-        match = pattern.search(title)
-        if match:
-            try:
-                year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                return datetime.date(year, month, day)
-            except ValueError:
-                continue
-    return None
