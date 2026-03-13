@@ -758,6 +758,13 @@ async def setup_database():
             """
         )
 
+        await database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_date_episode_cache_timestamp
+            ON date_episode_cache (timestamp)
+            """
+        )
+
         # =============================================================================
         # DMM_ENTRIES TABLE INDEXES
         # =============================================================================

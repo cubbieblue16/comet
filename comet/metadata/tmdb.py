@@ -116,7 +116,10 @@ class TMDBApi:
 
                 data = await response.json()
 
-            return data.get("seasons", [])
+            return [
+                {"season_number": s.get("season_number"), "air_date": s.get("air_date")}
+                for s in data.get("seasons", [])
+            ]
         except Exception as e:
             logger.error(f"TMDB: Error getting seasons for {tmdb_id}: {e}")
             return []

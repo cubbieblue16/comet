@@ -221,6 +221,14 @@ class StremThru:
             )
             parsed_iter = iter(parsed_results)
 
+        # Pre-parse SID outside of loops (used for date-based resolution)
+        sid_imdb_id = None
+        sid_search_season = None
+        if self.sid is not None and ":" in self.sid:
+            parts = self.sid.split(":")
+            sid_imdb_id = parts[0]
+            sid_search_season = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+
         files = []
         cached_count = 0
         for result in availability:
@@ -268,22 +276,18 @@ class StremThru:
 
                         # Date-based episode resolution fallback
                         if (
-                            self.sid is not None
-                            and ":" in self.sid
+                            sid_imdb_id is not None
                             and (season is None or episode is None)
                             and self.date_resolver
                         ):
-                            parts = self.sid.split(":")
-                            imdb_id = parts[0]
-                            search_season = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                             resolved_season, resolved_episode = await self.date_resolver.resolve(
-                                imdb_id, filename_parsed.date, search_season=search_season, fallback=False
+                                sid_imdb_id, filename_parsed.date, search_season=sid_search_season, fallback=False
                             )
                             if resolved_season is not None and resolved_episode is not None:
                                 season = resolved_season
                                 episode = resolved_episode
 
-                        if self.sid is not None and ":" in self.sid and (season is None or episode is None):
+                        if sid_imdb_id is not None and (season is None or episode is None):
                             continue
 
                         index = file["index"] if file["index"] != -1 else None
@@ -421,7 +425,7 @@ class StremThru:
                 file_episode = parsed.episodes[0] if parsed.episodes else None
 
                 # Date-based resolution fallback for scoring
-                if (file_season is None or file_episode is None) and self.date_resolver:
+                if (file_season is None or file_episode is None) and self.date_resolver and self.media_only_id:
                     resolved_season, resolved_episode = await self.date_resolver.resolve(
                         self.media_only_id, parsed.date, search_season=season, fallback=False
                     )
