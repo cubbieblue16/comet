@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date as _date
 
 import orjson
 from RTN import DefaultRanking, ParsedData
@@ -160,6 +161,17 @@ class TorrentManager:
             if row["episode"] is None and parsed_data.episodes:
                 if self.search_episode not in parsed_data.episodes:
                     continue
+
+            # Reboot/revival protection: reject cached torrents without a year
+            # for brand-new series (same logic as filter_worker).
+            if (
+                self.year
+                and not parsed_data.year
+                and not self.year_end
+                and self.media_type == "series"
+                and self.year >= _date.today().year - 1
+            ):
+                continue
 
             info_hash = row["info_hash"]
             self.torrents[info_hash] = {
