@@ -3,12 +3,19 @@ from collections import defaultdict
 import aiohttp
 
 
+_TRAKT_HEADERS = {
+    "trakt-api-version": "2",
+    "trakt-api-key": "0",
+}
+
+
 async def get_trakt_aliases(
     session: aiohttp.ClientSession, media_type: str, media_id: str
 ):
     try:
         async with session.get(
-            f"https://api.trakt.tv/{'movies' if media_type == 'movie' else 'shows'}/{media_id}/aliases"
+            f"https://api.trakt.tv/{'movies' if media_type == 'movie' else 'shows'}/{media_id}/aliases",
+            headers=_TRAKT_HEADERS,
         ) as response:
             data = await response.json()
 
