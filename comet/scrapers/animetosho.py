@@ -79,7 +79,7 @@ class AnimeToshoScraper(BaseScraper):
                     ".//newznab:response",
                     {"newznab": "http://www.newznab.com/DTD/2010/feeds/attributes/"},
                 )
-                total = int(response_node.get("total", 0))
+                total = int(response_node.get("total", 0)) if response_node is not None else 0
                 items = self.parse_items(root)
                 return items, total
         except Exception as e:

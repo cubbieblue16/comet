@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Optional
 
 from comet.core.database import IS_SQLITE, ON_CONFLICT_DO_NOTHING, database
+from comet.core.logger import logger
 from comet.core.models import settings
 from comet.services.lock import DistributedLock
 from comet.utils.media_ids import normalize_cache_media_ids
@@ -157,7 +158,8 @@ class CacheStateManager:
                 force_primary=True,
             )
             return inserted == 1
-        except Exception:
+        except Exception as e:
+            logger.debug(f"check_is_first_search error for {self.media_id}: {e}")
             return False
 
     async def _try_acquire_lock(self) -> bool:

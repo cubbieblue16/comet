@@ -33,7 +33,7 @@ class TorboxScraper(BaseScraper):
                 )
         except Exception as e:
             log_scraper_error(
-                "TorBox", settings.TORBOX_API_KEY, request.media_only_id, e
+                "TorBox", "https://search-api.torbox.app", request.media_only_id, e
             )
 
         return torrents

@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import orjson
 
+from comet.core.logger import logger
 from comet.core.models import (ConfigModel, default_config,
                                rtn_ranking_default, rtn_settings_default,
                                settings)
@@ -100,7 +101,8 @@ def _parse_and_validate_config(b64config: str):
         validated_config = _normalize_debrid_config(validated_config)
 
         return validated_config
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Config validation failed: {e}")
         return None
 
 

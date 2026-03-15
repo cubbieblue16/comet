@@ -32,9 +32,13 @@ def extract_torrent_data(html_content: str):
 
     titles = TITLE_PATTERN.findall(html_content)
 
-    for i in range(len(magnet_links)):
+    count = min(len(magnet_links), len(sizes), len(seeders), len(titles))
+    for i in range(count):
         magnet = magnet_links[i]
-        info_hash = INFO_HASH_PATTERN.search(magnet).group(1)
+        match = INFO_HASH_PATTERN.search(magnet)
+        if not match:
+            continue
+        info_hash = match.group(1)
 
         size_str = sizes[i]
         try:
@@ -108,7 +112,9 @@ async def get_all_nyaa_pages(session, query: str):
         page_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in page_results:
-            if isinstance(result, list):
+            if isinstance(result, Exception):
+                logger.warning(f"Nyaa page scrape failed: {result}")
+            elif isinstance(result, list):
                 all_torrents.extend(result)
 
     return all_torrents

@@ -203,7 +203,7 @@ def filter_worker(
     ez_aliases_normalized = list(tz_aliases)
 
     min_year = 0
-    max_year = float("inf")
+    max_year = _date.today().year + 1
 
     if year:
         if year_end:

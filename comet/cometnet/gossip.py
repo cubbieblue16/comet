@@ -376,8 +376,8 @@ class GossipEngine:
                     await self._save_torrent(torrent)
                     self.stats["torrents_received"] += 1
                     saved_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to save torrent from peer {sender_id[:8]}: {e}")
 
             if saved_count > 0:
                 logger.log(

@@ -23,6 +23,9 @@ class StremthruScraper(BaseScraper):
             async with self.session.get(
                 f"{self.url}/v0/torznab/api?t=search&imdbid={media_id}"
             ) as response:
+                if response.status != 200:
+                    logger.warning(f"StremThru returned HTTP {response.status} for {media_id}")
+                    return torrents
                 data_text = await response.text()
 
             root = ET.fromstring(data_text)

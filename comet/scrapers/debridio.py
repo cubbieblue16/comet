@@ -1,6 +1,6 @@
 import re
 
-from comet.core.logger import log_scraper_error
+from comet.core.logger import log_scraper_error, logger
 from comet.core.models import settings
 from comet.scrapers.base import BaseScraper
 from comet.scrapers.helpers.debridio import debridio_config
@@ -34,6 +34,9 @@ class DebridioScraper(BaseScraper):
             async with self.session.get(
                 f"https://addon.debridio.com/{b64_config}/stream/{request.media_type}/{request.media_id}.json"
             ) as response:
+                if response.status != 200:
+                    logger.warning(f"Debridio returned HTTP {response.status} for {request.media_id}")
+                    return torrents
                 results = await response.json()
 
             for torrent in results["streams"]:

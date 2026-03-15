@@ -684,10 +684,11 @@ class ConnectionManager:
                 )
                 return None
 
-            # Check if already connected to this node
-            if peer_handshake.sender_id in self._connections:
-                await websocket.close()
-                return peer_handshake.sender_id
+            # Check if already connected to this node (under lock to prevent races)
+            async with self._connection_lock:
+                if peer_handshake.sender_id in self._connections:
+                    await websocket.close()
+                    return peer_handshake.sender_id
 
             # Don't connect to ourselves
             if peer_handshake.sender_id == self.identity.node_id:
@@ -737,7 +738,8 @@ class ConnectionManager:
                 listen_port=peer_handshake.listen_port,
                 alias=peer_handshake.alias,
             )
-            self._connections[peer_handshake.sender_id] = conn
+            async with self._connection_lock:
+                self._connections[peer_handshake.sender_id] = conn
 
             # Store verified public key in keystore
             if self._keystore:
@@ -792,8 +794,8 @@ class ConnectionManager:
                                 logger.warning(f"Handler error for {message.type}: {e}")
                 except ConnectionClosed:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Receive loop error for {conn.node_id[:8]}: {e}")
         finally:
             # Clean up connection
             if conn.node_id in self._connections:
@@ -936,9 +938,10 @@ class ConnectionManager:
 
     async def disconnect_peer(self, node_id: str) -> None:
         """Disconnect from a specific peer."""
-        if node_id in self._connections:
-            await self._connections[node_id].close()
-            del self._connections[node_id]
+        async with self._connection_lock:
+            conn = self._connections.pop(node_id, None)
+        if conn:
+            await conn.close()
 
     async def _remediate_eclipse_attack(self) -> None:
         """

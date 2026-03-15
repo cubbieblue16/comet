@@ -2,6 +2,8 @@ from collections import defaultdict
 
 import aiohttp
 
+from comet.core.logger import logger
+
 
 _TRAKT_HEADERS = {
     "trakt-api-version": "2",
@@ -29,7 +31,7 @@ async def get_trakt_aliases(
                 result[key].add(title)
 
         return {k: list(v) for k, v in result.items()}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to fetch Trakt aliases for {media_id}: {e}")
 
     return {}

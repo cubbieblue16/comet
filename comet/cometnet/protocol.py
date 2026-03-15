@@ -13,6 +13,7 @@ import msgpack
 from pydantic import BaseModel, Field, field_validator
 
 from comet.cometnet.utils import canonicalize_data
+from comet.core.logger import logger
 from comet.utils.formatting import normalize_info_hash
 
 # Protocol version for backwards compatibility
@@ -336,5 +337,6 @@ def parse_message(data: Union[str, bytes]) -> Optional[AnyMessage]:
             return PoolDeleteMessage.model_validate(payload)
         else:
             return None
-    except (ValueError, Exception):
+    except (ValueError, Exception) as e:
+        logger.debug(f"Failed to parse message: {e}")
         return None

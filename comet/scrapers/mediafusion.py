@@ -33,10 +33,14 @@ class MediaFusionScraper(BaseScraper):
                 title = lines[0].replace("📂 ", "").replace("/", "")
 
                 seeders = None
-                if "👤" in lines[1]:
-                    seeders = int(lines[1].split("👤 ")[1].split("\n")[0])
+                if len(lines) > 1 and "👤" in lines[1]:
+                    try:
+                        seeders = int(lines[1].split("👤 ")[1].split("\n")[0])
+                    except (ValueError, IndexError):
+                        pass
 
-                tracker = lines[-1].split("🔗 ")[1]
+                tracker_parts = lines[-1].split("🔗 ")
+                tracker = tracker_parts[1] if len(tracker_parts) > 1 else "MediaFusion"
 
                 torrents.append(
                     {

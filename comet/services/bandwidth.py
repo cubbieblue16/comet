@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 from comet.core.logger import logger
-from comet.core.models import database, settings
+from comet.core.models import IS_SQLITE, database, settings
 
 
 @dataclass
@@ -214,16 +214,15 @@ class BandwidthMonitor:
 
                 # Update database with alltime total
                 sync_timestamp = time.time()
-                try:
-                    # Try to insert first
+                if IS_SQLITE:
                     await database.execute(
-                        "INSERT INTO bandwidth_stats (id, total_bytes, last_updated) VALUES (1, :total_bytes, :timestamp)",
+                        "INSERT OR REPLACE INTO bandwidth_stats (id, total_bytes, last_updated) VALUES (1, :total_bytes, :timestamp)",
                         {"total_bytes": total_bytes, "timestamp": sync_timestamp},
                     )
-                except Exception:
-                    # If insert fails (record exists), update instead
+                else:
                     await database.execute(
-                        "UPDATE bandwidth_stats SET total_bytes = :total_bytes, last_updated = :timestamp WHERE id = 1",
+                        "INSERT INTO bandwidth_stats (id, total_bytes, last_updated) VALUES (1, :total_bytes, :timestamp) "
+                        "ON CONFLICT (id) DO UPDATE SET total_bytes = :total_bytes, last_updated = :timestamp",
                         {"total_bytes": total_bytes, "timestamp": sync_timestamp},
                     )
 

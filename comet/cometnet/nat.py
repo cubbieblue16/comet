@@ -105,8 +105,8 @@ class UPnPManager:
             upnp.selectigd()
             upnp.deleteportmapping(self.port, "TCP")
             logger.log("COMETNET", f"UPnP port mapping removed for port {self.port}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to remove UPnP port mapping for port {self.port}: {e}")
 
     def _keepalive_loop(self) -> None:
         """Periodically renew the port mapping."""

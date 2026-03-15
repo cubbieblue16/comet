@@ -92,7 +92,8 @@ class ProwlarrScraper(BaseScraper):
             ) as response:
                 return await response.json()
         except Exception as e:
-            return e
+            logger.warning(f"Prowlarr search request failed: {e}")
+            return []
 
     async def scrape(self, request: ScrapeRequest):
         if not settings.PROWLARR_INDEXERS:

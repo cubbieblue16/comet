@@ -41,7 +41,7 @@ class JackettioScraper(BaseScraper):
                         "seeders": seeders,
                         "size": size,
                         "tracker": f"Jackettio|{tracker}",
-                        "sources": None,
+                        "sources": [],
                     }
                 )
         except Exception as e:

@@ -1,4 +1,4 @@
-from comet.core.logger import log_scraper_error
+from comet.core.logger import log_scraper_error, logger
 from comet.scrapers.base import BaseScraper
 from comet.scrapers.models import ScrapeRequest
 
@@ -21,6 +21,7 @@ class CometScraper(BaseScraper):
                 try:
                     title = title_full.split("\n")[0].split("📄 ")[1]
                 except Exception:
+                    logger.debug(f"Comet scraper: failed to parse title from: {title_full[:80]}")
                     continue
 
                 seeders = (
