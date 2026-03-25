@@ -20,8 +20,26 @@ else:
         pass
 
 
-def quick_alias_match(text_normalized: str, ez_aliases_normalized: list[str]):
-    return any(alias in text_normalized for alias in ez_aliases_normalized)
+def quick_alias_match(
+    text_normalized: str,
+    ez_aliases_normalized: list[str],
+    parsed_title_normalized: str = "",
+):
+    # Forward: alias is substring of torrent title
+    # e.g. alias "wwe smackdown" in torrent "wwe smackdown 2026 03 20 1080p"
+    if any(alias in text_normalized for alias in ez_aliases_normalized):
+        return True
+    # Reverse: parsed title is substring of an alias
+    # e.g. parsed "smackdown" is in alias "wwe smackdown"
+    if parsed_title_normalized and len(parsed_title_normalized) >= 4:
+        if any(parsed_title_normalized in alias for alias in ez_aliases_normalized):
+            return True
+    return False
+
+
+def _all_words_match(expected_normalized: str, text_normalized: str):
+    """Check if all words from expected title appear in the torrent title."""
+    return all(word in text_normalized for word in expected_normalized.split())
 
 
 def scrub(t: str):
@@ -200,6 +218,10 @@ def filter_worker(
             for t in titles:
                 tz_aliases.add(scrub(t))
 
+    # Always include the canonical title so it participates in matching
+    title_scrubbed = scrub(title)
+    tz_aliases.add(title_scrubbed)
+
     ez_aliases_normalized = list(tz_aliases)
     min_year = 0
     max_year = _date.today().year + 1
@@ -244,15 +266,20 @@ def filter_worker(
             _log_exclusion(f"❌ Rejected (No Parsed Title) | {torrent_title}")
             continue
 
+        scrubbed_torrent = scrub(torrent_title)
+        parsed_title_scrubbed = scrub(parsed.parsed_title) if parsed.parsed_title else ""
         alias_matched = ez_aliases_normalized and quick_alias_match(
-            scrub(torrent_title), ez_aliases_normalized
+            scrubbed_torrent, ez_aliases_normalized, parsed_title_scrubbed
         )
         if not alias_matched:
-            if not title_match(title, parsed.parsed_title, aliases=aliases):
-                _log_exclusion(
-                    f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
-                )
-                continue
+            # Fallback: check if all words of the expected title appear in the torrent
+            # e.g. expected "wwe raw" → torrent "wwe monday night raw 2023..." contains both "wwe" and "raw"
+            if not _all_words_match(title_scrubbed, scrubbed_torrent):
+                if not title_match(title, parsed.parsed_title, aliases=aliases):
+                    _log_exclusion(
+                        f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
+                    )
+                    continue
 
         if year and parsed.year:
             if not (min_year <= parsed.year <= max_year):

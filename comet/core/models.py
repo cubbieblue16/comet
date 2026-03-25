@@ -211,6 +211,7 @@ class AppSettings(BaseSettings):
     ANIME_MAPPING_REFRESH_INTERVAL: Optional[int] = 432000
     DIGITAL_RELEASE_FILTER: Optional[bool] = False
     TMDB_READ_ACCESS_TOKEN: Optional[str] = None
+    TRAKT_API_KEY: Optional[str] = ""
     GLOBAL_PROXY_URL: Optional[str] = None
     PROXY_ETHOS: Optional[str] = "always"
     RATELIMIT_MAX_RETRIES: Optional[int] = 3

@@ -3,22 +3,31 @@ from collections import defaultdict
 import aiohttp
 
 from comet.core.logger import logger
+from comet.core.models import settings
 
 
-_TRAKT_HEADERS = {
-    "trakt-api-version": "2",
-    "trakt-api-key": "0",
-}
+def _get_trakt_headers():
+    return {
+        "trakt-api-version": "2",
+        "trakt-api-key": settings.TRAKT_API_KEY or "",
+    }
 
 
 async def get_trakt_aliases(
     session: aiohttp.ClientSession, media_type: str, media_id: str
 ):
+    api_key = settings.TRAKT_API_KEY
+    if not api_key:
+        return {}
+
     try:
         async with session.get(
             f"https://api.trakt.tv/{'movies' if media_type == 'movie' else 'shows'}/{media_id}/aliases",
-            headers=_TRAKT_HEADERS,
+            headers=_get_trakt_headers(),
         ) as response:
+            if response.status != 200:
+                logger.warning(f"Trakt API returned HTTP {response.status} for {media_id}")
+                return {}
             data = await response.json()
 
         result = defaultdict(set)
