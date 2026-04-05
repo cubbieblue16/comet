@@ -1,5 +1,4 @@
 from collections import OrderedDict, defaultdict
-from datetime import date as _date
 from threading import Event, Lock
 
 from pydantic import ValidationError
@@ -40,6 +39,25 @@ def quick_alias_match(
 def _all_words_match(expected_normalized: str, text_normalized: str):
     """Check if all words from expected title appear in the torrent title."""
     return all(word in text_normalized for word in expected_normalized.split())
+
+
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for",
+    "is", "it", "by", "with", "from", "as", "be", "was", "are", "but",
+    "not", "no", "do", "if", "so", "up", "out", "all", "its", "vs",
+})
+
+
+def _significant_word_overlap(expected_normalized: str, text_normalized: str) -> bool:
+    """Accept if >= 50% of significant words from expected title appear in
+    the torrent title.  Significant = 3+ chars and not a stop word."""
+    expected_words = expected_normalized.split()
+    significant = [w for w in expected_words if len(w) >= 3 and w not in _STOP_WORDS]
+    if not significant:
+        return False
+    text_words = set(text_normalized.split())
+    matches = sum(1 for w in significant if w in text_words)
+    return matches / len(significant) >= 0.5
 
 
 def scrub(t: str):
@@ -223,15 +241,6 @@ def filter_worker(
     tz_aliases.add(title_scrubbed)
 
     ez_aliases_normalized = list(tz_aliases)
-    min_year = 0
-    max_year = _date.today().year + 1
-
-    if year:
-        if year_end:
-            min_year = year
-            max_year = year_end
-        else:
-            min_year = year - 1
 
     for torrent in torrents:
         torrent_title = torrent["title"]
@@ -245,8 +254,17 @@ def filter_worker(
         try:
             parsed = _parse_with_cache(torrent_title)
         except ValidationError:
-            _log_exclusion(f"❌ Rejected (Parse Error) | {torrent_title}")
-            continue
+            cleaned = torrent_title.replace("[", "").replace("]", "").replace("(", "").replace(")", "").strip()
+            if cleaned and cleaned != torrent_title:
+                try:
+                    parsed = _parse_with_cache(cleaned)
+                    _log_exclusion(f"⚠️ Parse retry succeeded (cleaned) | {torrent_title}")
+                except (ValidationError, Exception):
+                    _log_exclusion(f"❌ Rejected (Parse Error after retry) | {torrent_title}")
+                    continue
+            else:
+                _log_exclusion(f"❌ Rejected (Parse Error) | {torrent_title}")
+                continue
 
         if parsed.parsed_title and country_aliases:
             language = country_aliases.get(scrub(parsed.parsed_title))
@@ -263,50 +281,25 @@ def filter_worker(
             continue
 
         if not parsed.parsed_title:
-            _log_exclusion(f"❌ Rejected (No Parsed Title) | {torrent_title}")
-            continue
+            _log_exclusion(f"⚠️ No parsed title, using raw | {torrent_title}")
 
         scrubbed_torrent = scrub(torrent_title)
-        parsed_title_scrubbed = scrub(parsed.parsed_title) if parsed.parsed_title else ""
+        parsed_title_scrubbed = scrub(parsed.parsed_title) if parsed.parsed_title else scrub(torrent_title)
         alias_matched = ez_aliases_normalized and quick_alias_match(
             scrubbed_torrent, ez_aliases_normalized, parsed_title_scrubbed
         )
         if not alias_matched:
-            # Fallback: check if all words of the expected title appear in the torrent
-            # e.g. expected "wwe raw" → torrent "wwe monday night raw 2023..." contains both "wwe" and "raw"
+            # Fallback cascade — accept on first match:
+            # 1. All words present
+            # 2. >= 50% significant word overlap
+            # 3. Levenshtein 85% similarity
             if not _all_words_match(title_scrubbed, scrubbed_torrent):
-                if not title_match(title, parsed.parsed_title, aliases=aliases):
-                    _log_exclusion(
-                        f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
-                    )
-                    continue
-
-        if year and parsed.year:
-            if not (min_year <= parsed.year <= max_year):
-                if year_end:
-                    expected = f"{year}-{year_end}"
-                else:
-                    expected = f">={min_year}"
-
-                _log_exclusion(
-                    f"📅 Rejected (Year Mismatch) | {torrent_title} | Year: {parsed.year} | Expected: {expected}"
-                )
-                continue
-
-        # Reboot/revival protection: for a brand-new series, require the
-        # year in the torrent filename.  Without it, there is no way to
-        # distinguish old same-named shows (e.g. Scrubs 2001 vs 2026).
-        if (
-            year
-            and not parsed.year
-            and not year_end
-            and media_type == "series"
-            and year >= _date.today().year - 1
-        ):
-            _log_exclusion(
-                f"📅 Rejected (No Year for New Show) | {torrent_title} | Show Year: {year}"
-            )
-            continue
+                if not _significant_word_overlap(title_scrubbed, scrubbed_torrent):
+                    if not title_match(title, parsed.parsed_title or torrent_title, aliases=aliases):
+                        _log_exclusion(
+                            f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
+                        )
+                        continue
 
         torrent["parsed"] = parsed
         results.append(torrent)

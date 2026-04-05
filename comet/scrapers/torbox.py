@@ -1,4 +1,4 @@
-from comet.core.logger import log_scraper_error
+from comet.core.logger import log_scraper_error, logger
 from comet.core.models import settings
 from comet.scrapers.base import BaseScraper
 from comet.scrapers.models import ScrapeRequest
@@ -10,6 +10,9 @@ class TorboxScraper(BaseScraper):
         super().__init__(manager, session)
 
     async def scrape(self, request: ScrapeRequest):
+        if not settings.TORBOX_API_KEY:
+            return []
+
         torrents = []
 
         try:
@@ -17,7 +20,16 @@ class TorboxScraper(BaseScraper):
                 f"https://search-api.torbox.app/torrents/imdb:{request.media_only_id}",
                 headers={"Authorization": f"Bearer {settings.TORBOX_API_KEY}"},
             ) as response:
+                if response.status != 200:
+                    logger.warning(
+                        f"TorBox returned HTTP {response.status} for {request.media_only_id}"
+                    )
+                    return torrents
+
                 data = await response.json()
+
+            if not data or not data.get("data") or not data["data"].get("torrents"):
+                return torrents
 
             for torrent in data["data"]["torrents"]:
                 torrents.append(

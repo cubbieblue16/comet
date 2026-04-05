@@ -1,5 +1,7 @@
 from RTN import Torrent, check_fetch, get_rank, sort_torrents
 
+from comet.core.logger import logger
+
 
 def rank_worker(
     torrents,
@@ -37,7 +39,7 @@ def rank_worker(
                     lev_ratio=0.0,
                 )
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to create Torrent object for '{raw_title}': {e}")
 
     return sort_torrents(ranked_torrents, max_results_per_resolution)
