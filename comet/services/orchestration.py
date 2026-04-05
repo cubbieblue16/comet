@@ -200,13 +200,13 @@ class TorrentManager:
             ):
                 continue
 
-            reject_unknown_override = (
+            reject_override = False if self.target_air_date else (
                 True
                 if self.reject_unknown_episode_files and self.search_episode is not None
                 else None
             )
             if not self._matches_requested_scope(
-                parsed_data, reject_unknown_override=reject_unknown_override
+                parsed_data, reject_unknown_override=reject_override
             ):
                 continue
 
