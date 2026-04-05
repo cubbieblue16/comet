@@ -1,3 +1,4 @@
+from datetime import date as _date, timedelta
 from functools import lru_cache
 
 from RTN import ParsedData
@@ -133,7 +134,14 @@ def match_parsed_episode_target(
     if isinstance(parsed_date, str) and parsed_date:
         if target_air_date is None:
             return not reject_unknown_episode_files
-        return parsed_date == target_air_date
+        # Allow +/- 1 day tolerance for timezone differences
+        # (e.g. US Monday night air = Tuesday UTC in TMDB)
+        try:
+            pd = _date.fromisoformat(parsed_date)
+            td = _date.fromisoformat(target_air_date)
+            return abs((pd - td).days) <= 1
+        except (ValueError, TypeError):
+            return parsed_date == target_air_date
 
     parsed_year = parsed.year
     if parsed.complete and parsed_year and target_air_date:
