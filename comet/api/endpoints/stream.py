@@ -430,7 +430,7 @@ async def stream(
     enable_torrent = config["_enableTorrent"]
     deduplicate_streams = config["deduplicateStreams"]
     scrape_debrid_account_torrents = config["scrapeDebridAccountTorrents"]
-    use_account_scrape = bool(debrid_entries and scrape_debrid_account_torrents)
+    use_account_scrape = bool(debrid_entries and (scrape_debrid_account_torrents or settings.AUTO_SCRAPE_DEBRID_ACCOUNT))
     response_cache_policy = CachePolicies.no_cache() if use_account_scrape else None
 
     def _stream_response(content: dict, is_empty: bool = False):
@@ -950,6 +950,7 @@ async def stream(
         kodi_meta = _build_kodi_meta(rtn_data, formatted_components) if kodi else None
         info_hash_cache_status = service_cache_status.get(info_hash)
         quoted_torrent_title = quote(torrent_title)
+        is_from_library = torrent.get("tracker", "").startswith("DebridAccount")
 
         for entry_index, service, debrid_extension in debrid_stream_specs:
             if service in debrid_errors:
@@ -976,15 +977,27 @@ async def stream(
             if kodi_meta is not None:
                 behavior_hints["cometKodiMetaV1"] = kodi_meta
 
-            stream_name = _build_stream_name(
-                kodi,
-                debrid_extension,
-                rtn_data.resolution,
-                icon="⚡" if is_cached else "⬇️",
-                formatted_components=formatted_components,
-                seeders=torrent["seeders"],
-                status="C" if is_cached else "U",
-            )
+            if is_from_library:
+                lib_icon = "📚" if not kodi else ""
+                stream_name = _build_stream_name(
+                    kodi,
+                    debrid_extension,
+                    rtn_data.resolution,
+                    icon=lib_icon,
+                    formatted_components=formatted_components,
+                    seeders=torrent["seeders"],
+                    status="LIB" if kodi else "Library",
+                )
+            else:
+                stream_name = _build_stream_name(
+                    kodi,
+                    debrid_extension,
+                    rtn_data.resolution,
+                    icon="⚡" if is_cached else "⬇️",
+                    formatted_components=formatted_components,
+                    seeders=torrent["seeders"],
+                    status="C" if is_cached else "U",
+                )
 
             the_stream = {
                 "name": stream_name,

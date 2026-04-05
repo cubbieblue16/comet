@@ -185,6 +185,7 @@ class AppSettings(BaseSettings):
     REMOVE_ADULT_CONTENT: Optional[bool] = False
     PERMISSIVE_RANKING: Optional[bool] = True
     PERMISSIVE_EPISODE_MATCHING: Optional[bool] = True
+    AUTO_SCRAPE_DEBRID_ACCOUNT: Optional[bool] = False
     BACKGROUND_SCRAPER_ENABLED: Optional[bool] = False
     BACKGROUND_SCRAPER_CONCURRENT_WORKERS: Optional[int] = 1
     BACKGROUND_SCRAPER_INTERVAL: Optional[int] = 3600
