@@ -1,6 +1,7 @@
 from RTN import Torrent, check_fetch, get_rank, sort_torrents
 
 from comet.core.logger import logger
+from comet.core.models import settings
 
 
 def rank_worker(
@@ -12,6 +13,7 @@ def rank_worker(
     remove_trash,
 ):
     ranked_torrents = set()
+    permissive = settings.PERMISSIVE_RANKING
     for info_hash, torrent in torrents.items():
         if max_size != 0:
             torrent_size = torrent["size"]
@@ -25,8 +27,14 @@ def rank_worker(
         rank = get_rank(parsed, rtn_settings, rtn_ranking)
 
         if remove_trash:
-            if not is_fetchable or rank < rtn_settings.options["remove_ranks_under"]:
-                continue
+            if permissive:
+                # Only reject truly unwatchable content (CAM/SCREENER/TELESYNC)
+                # check_fetch result kept for Torrent object but not used as gate
+                if rank <= -10000:
+                    continue
+            else:
+                if not is_fetchable or rank < rtn_settings.options["remove_ranks_under"]:
+                    continue
 
         try:
             ranked_torrents.add(

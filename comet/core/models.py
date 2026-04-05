@@ -183,6 +183,8 @@ class AppSettings(BaseSettings):
     TORRENT_DISABLED_STREAM_URL: Optional[str] = "https://comet.feels.legal"
     PUBLIC_BASE_URL: Optional[str] = None
     REMOVE_ADULT_CONTENT: Optional[bool] = False
+    PERMISSIVE_RANKING: Optional[bool] = True
+    PERMISSIVE_EPISODE_MATCHING: Optional[bool] = True
     BACKGROUND_SCRAPER_ENABLED: Optional[bool] = False
     BACKGROUND_SCRAPER_CONCURRENT_WORKERS: Optional[int] = 1
     BACKGROUND_SCRAPER_INTERVAL: Optional[int] = 3600

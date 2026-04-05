@@ -5,7 +5,7 @@ from RTN import DefaultRanking, ParsedData
 
 from comet.core.execution import get_executor
 from comet.core.logger import logger
-from comet.core.models import CometSettingsModel, database
+from comet.core.models import CometSettingsModel, database, settings
 from comet.scrapers.manager import scraper_manager
 from comet.scrapers.models import ScrapeRequest
 from comet.services.filtering import filter_worker
@@ -122,10 +122,14 @@ class TorrentManager:
         asyncio.create_task(self.cache_torrents())
 
         for torrent in self.ready_to_cache:
-            # When a target air date is available (date-based shows like WWE),
-            # relax strict episode rejection — date matching handles correctness
-            # and strict mode kills torrents with no S/E in the filename.
-            reject_override = False if self.target_air_date else None
+            # Permissive mode: never reject unknown episode files
+            # Date-based fallback: relax for shows with air dates (WWE etc)
+            if settings.PERMISSIVE_EPISODE_MATCHING:
+                reject_override = False
+            elif self.target_air_date:
+                reject_override = False
+            else:
+                reject_override = None
             if not self._matches_requested_scope(
                 torrent["parsed"], reject_unknown_override=reject_override
             ):
@@ -200,11 +204,16 @@ class TorrentManager:
             ):
                 continue
 
-            reject_override = False if self.target_air_date else (
-                True
-                if self.reject_unknown_episode_files and self.search_episode is not None
-                else None
-            )
+            if settings.PERMISSIVE_EPISODE_MATCHING:
+                reject_override = False
+            elif self.target_air_date:
+                reject_override = False
+            else:
+                reject_override = (
+                    True
+                    if self.reject_unknown_episode_files and self.search_episode is not None
+                    else None
+                )
             if not self._matches_requested_scope(
                 parsed_data, reject_unknown_override=reject_override
             ):
