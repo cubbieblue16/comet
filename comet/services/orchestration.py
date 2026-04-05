@@ -122,7 +122,13 @@ class TorrentManager:
         asyncio.create_task(self.cache_torrents())
 
         for torrent in self.ready_to_cache:
-            if not self._matches_requested_scope(torrent["parsed"]):
+            # When a target air date is available (date-based shows like WWE),
+            # relax strict episode rejection — date matching handles correctness
+            # and strict mode kills torrents with no S/E in the filename.
+            reject_override = False if self.target_air_date else None
+            if not self._matches_requested_scope(
+                torrent["parsed"], reject_unknown_override=reject_override
+            ):
                 continue
 
             info_hash = torrent["infoHash"]
