@@ -703,7 +703,7 @@ async def stream(
 
     service_cache_status = defaultdict(dict)
     verified_service_cache_status = defaultdict(dict)
-    show_account_sync_trigger = use_account_scrape
+    show_account_sync_trigger = use_account_scrape and not settings.AUTO_SCRAPE_DEBRID_ACCOUNT
     if use_account_scrape:
         if not account_snapshot_ready:
             await ensure_account_snapshot_ready(session, debrid_entries, ip)

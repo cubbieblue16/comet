@@ -1431,6 +1431,14 @@
                         </sl-button>
                         <sl-button
                           size="small"
+                          variant="success"
+                          onclick="document.getElementById('add-scrape-dialog').show()"
+                        >
+                          <sl-icon slot="prefix" name="plus-circle"></sl-icon>
+                          Add to Queue
+                        </sl-button>
+                        <sl-button
+                          size="small"
                           variant="neutral"
                           onclick="loadBackgroundScraperData()"
                         >
@@ -4230,6 +4238,57 @@
               `,
             )
             .join("");
+        }
+      }
+    </script>
+
+    <sl-dialog id="add-scrape-dialog" label="Add to Scraper Queue">
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <sl-input id="add-scrape-imdb" label="IMDb ID" placeholder="tt1234567" clearable></sl-input>
+        <sl-select id="add-scrape-type" label="Type" value="series">
+          <sl-option value="movie">Movie</sl-option>
+          <sl-option value="series">Series</sl-option>
+        </sl-select>
+        <sl-input id="add-scrape-title" label="Title (optional)" placeholder="e.g. WWE Raw" clearable></sl-input>
+      </div>
+      <sl-button slot="footer" variant="primary" onclick="submitAddScrapeItem()">
+        <sl-icon slot="prefix" name="plus-circle"></sl-icon>
+        Add
+      </sl-button>
+    </sl-dialog>
+
+    <script>
+      async function submitAddScrapeItem() {
+        const mediaId = document.getElementById("add-scrape-imdb").value.trim();
+        const mediaType = document.getElementById("add-scrape-type").value;
+        const title = document.getElementById("add-scrape-title").value.trim();
+
+        if (!mediaId || !mediaId.startsWith("tt")) {
+          showToast("Enter a valid IMDb ID (e.g. tt1234567)", "danger");
+          return;
+        }
+
+        try {
+          const response = await fetch("/admin/api/background-scraper/add-item", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              media_id: mediaId,
+              media_type: mediaType,
+              title: title || mediaId,
+            }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.success === false) {
+            throw new Error(data.message || "Failed to add item");
+          }
+          showToast(data.message || "Added to queue", "success");
+          document.getElementById("add-scrape-dialog").hide();
+          document.getElementById("add-scrape-imdb").value = "";
+          document.getElementById("add-scrape-title").value = "";
+          await loadBackgroundScraperData();
+        } catch (error) {
+          showToast(`Failed: ${error.message}`, "danger");
         }
       }
     </script>

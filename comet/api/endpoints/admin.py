@@ -600,3 +600,67 @@ async def admin_background_scraper_requeue_dead(
             "requeued": requeued,
         }
     )
+
+
+@router.post(
+    "/admin/api/background-scraper/add-item",
+    tags=["Admin"],
+    summary="Add Item to Scraper Queue",
+    description="Adds a movie or series to the background scraper queue by IMDb ID.",
+)
+async def admin_background_scraper_add_item(
+    request: Request,
+    admin_session: str = Cookie(None, description="Admin session token"),
+):
+    require_admin_auth(admin_session)
+    body = await request.json()
+    media_id = (body.get("media_id") or "").strip()
+    media_type = (body.get("media_type") or "movie").strip().lower()
+
+    if not media_id or not media_id.startswith("tt"):
+        return JSONResponse(
+            {"success": False, "message": "Valid IMDb ID required (e.g. tt1234567)"},
+            status_code=400,
+        )
+
+    if media_type not in ("movie", "series"):
+        return JSONResponse(
+            {"success": False, "message": "media_type must be 'movie' or 'series'"},
+            status_code=400,
+        )
+
+    title = body.get("title") or media_id
+    year = body.get("year")
+    now = time.time()
+
+    # Insert with max priority so it gets picked up immediately
+    await database.execute(
+        """
+        INSERT INTO background_scraper_items
+        (media_id, media_type, title, year, year_end, priority_score, status,
+         consecutive_failures, created_at, updated_at)
+        VALUES
+        (:media_id, :media_type, :title, :year, NULL, 9999.0, 'discovered',
+         0, :now, :now)
+        ON CONFLICT (media_id) DO UPDATE SET
+            status = 'discovered',
+            priority_score = 9999.0,
+            consecutive_failures = 0,
+            next_retry_at = NULL,
+            updated_at = :now
+        """,
+        {
+            "media_id": media_id,
+            "media_type": media_type,
+            "title": title,
+            "year": year,
+            "now": now,
+        },
+    )
+
+    return JSONResponse(
+        {
+            "success": True,
+            "message": f"Added {title} ({media_id}) to scraper queue with max priority",
+        }
+    )
