@@ -10,8 +10,12 @@ from fastapi.templating import Jinja2Templates
 from comet.background_scraper.worker import background_scraper
 from comet.core.logger import log_capture, logger
 from comet.core.models import database, settings
+from comet.metadata.manager import MetadataScraper
 from comet.services.bandwidth import bandwidth_monitor
+from comet.services.orchestration import TorrentManager
 from comet.utils.formatting import format_bytes
+from comet.utils.http_client import http_client_manager
+from comet.utils.parsing import parse_media_id
 from comet.utils.signed_session import (derive_session_secret,
                                         encode_signed_session,
                                         verify_signed_session)
@@ -603,12 +607,12 @@ async def admin_background_scraper_requeue_dead(
 
 
 @router.post(
-    "/admin/api/background-scraper/add-item",
+    "/admin/api/scrape-now",
     tags=["Admin"],
-    summary="Add Item to Scraper Queue",
-    description="Adds a movie or series to the background scraper queue by IMDb ID.",
+    summary="Scrape Media Now",
+    description="Immediately scrapes a movie or series by IMDb ID.",
 )
-async def admin_background_scraper_add_item(
+async def admin_scrape_now(
     request: Request,
     admin_session: str = Cookie(None, description="Admin session token"),
 ):
@@ -629,38 +633,59 @@ async def admin_background_scraper_add_item(
             status_code=400,
         )
 
-    title = body.get("title") or media_id
-    year = body.get("year")
-    now = time.time()
+    try:
+        session = await http_client_manager.get_session()
+        metadata_scraper = MetadataScraper(session)
 
-    # Insert with max priority so it gets picked up immediately
-    await database.execute(
-        """
-        INSERT INTO background_scraper_items
-        (media_id, media_type, title, year, year_end, priority_score, status,
-         consecutive_failures, created_at, updated_at)
-        VALUES
-        (:media_id, :media_type, :title, :year, NULL, 9999.0, 'discovered',
-         0, :now, :now)
-        ON CONFLICT (media_id) DO UPDATE SET
-            status = 'discovered',
-            priority_score = 9999.0,
-            consecutive_failures = 0,
-            next_retry_at = NULL,
-            updated_at = :now
-        """,
-        {
-            "media_id": media_id,
-            "media_type": media_type,
-            "title": title,
-            "year": year,
-            "now": now,
-        },
-    )
+        if media_type == "movie":
+            full_id = media_id
+        else:
+            full_id = f"{media_id}:1:1"
 
-    return JSONResponse(
-        {
-            "success": True,
-            "message": f"Added {title} ({media_id}) to scraper queue with max priority",
-        }
-    )
+        id, season, episode = parse_media_id(media_type, full_id)
+
+        metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
+            media_type, full_id, id, season, episode
+        )
+
+        if metadata is None:
+            return JSONResponse(
+                {"success": False, "message": f"Could not fetch metadata for {media_id}"},
+                status_code=404,
+            )
+
+        title = metadata["title"]
+        year = metadata["year"]
+        year_end = metadata["year_end"]
+
+        manager = TorrentManager(
+            media_type=media_type,
+            media_full_id=full_id,
+            media_only_id=media_id,
+            title=title,
+            year=year,
+            year_end=year_end,
+            season=metadata.get("season"),
+            episode=metadata.get("episode"),
+            aliases=aliases,
+            remove_adult_content=settings.REMOVE_ADULT_CONTENT,
+        )
+
+        await manager.scrape_torrents()
+        torrents_found = len(manager.torrents)
+
+        return JSONResponse(
+            {
+                "success": True,
+                "message": f"Scraped {title} ({media_id}) — found {torrents_found} torrents",
+                "title": title,
+                "torrents_found": torrents_found,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Admin scrape failed for {media_id}: {e}")
+        return JSONResponse(
+            {"success": False, "message": f"Scrape failed: {str(e)}"},
+            status_code=500,
+        )
