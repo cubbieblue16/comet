@@ -133,7 +133,11 @@ def match_parsed_episode_target(
     parsed_date = parsed.date
     if isinstance(parsed_date, str) and parsed_date:
         if target_air_date is None:
-            return not reject_unknown_episode_files
+            # Torrent has a specific date but we have no target to validate against.
+            # Always reject — PERMISSIVE mode only applies to torrents with no
+            # date/episode info (season packs, generic files). Accepting unvalidated
+            # date-specific torrents causes wrong-episode results for date-based shows.
+            return False
         # Allow +/- 1 day tolerance for timezone differences
         # (e.g. US Monday night air = Tuesday UTC in TMDB)
         try:

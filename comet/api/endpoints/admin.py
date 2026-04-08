@@ -639,49 +639,100 @@ async def admin_scrape_now(
 
         if media_type == "movie":
             full_id = media_id
-        else:
-            full_id = f"{media_id}:1:1"
+            id, season, episode = parse_media_id(media_type, full_id)
 
-        id, season, episode = parse_media_id(media_type, full_id)
-
-        metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
-            media_type, full_id, id, season, episode
-        )
-
-        if metadata is None:
-            return JSONResponse(
-                {"success": False, "message": f"Could not fetch metadata for {media_id}"},
-                status_code=404,
+            metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
+                media_type, full_id, id, season, episode
             )
 
-        title = metadata["title"]
-        year = metadata["year"]
-        year_end = metadata["year_end"]
+            if metadata is None:
+                return JSONResponse(
+                    {"success": False, "message": f"Could not fetch metadata for {media_id}"},
+                    status_code=404,
+                )
 
-        manager = TorrentManager(
-            media_type=media_type,
-            media_full_id=full_id,
-            media_only_id=media_id,
-            title=title,
-            year=year,
-            year_end=year_end,
-            season=metadata.get("season"),
-            episode=metadata.get("episode"),
-            aliases=aliases,
-            remove_adult_content=settings.REMOVE_ADULT_CONTENT,
-        )
+            title = metadata["title"]
+            year = metadata["year"]
+            year_end = metadata["year_end"]
 
-        await manager.scrape_torrents()
-        torrents_found = len(manager.torrents)
+            manager = TorrentManager(
+                media_type=media_type,
+                media_full_id=full_id,
+                media_only_id=media_id,
+                title=title,
+                year=year,
+                year_end=year_end,
+                season=metadata.get("season"),
+                episode=metadata.get("episode"),
+                aliases=aliases,
+                remove_adult_content=settings.REMOVE_ADULT_CONTENT,
+            )
 
-        return JSONResponse(
-            {
-                "success": True,
-                "message": f"Scraped {title} ({media_id}) — found {torrents_found} torrents",
-                "title": title,
-                "torrents_found": torrents_found,
-            }
-        )
+            await manager.scrape_torrents()
+            torrents_found = len(manager.torrents)
+
+            return JSONResponse(
+                {
+                    "success": True,
+                    "message": f"Scraped {title} ({media_id}) — found {torrents_found} torrents",
+                    "title": title,
+                    "torrents_found": torrents_found,
+                }
+            )
+
+        else:
+            # Series: queue with max priority so the background scraper picks it up
+            # immediately and processes all episodes with correct season/episode context.
+            # Direct scraping a series without episode context stores results under
+            # the wrong season and produces unusable cache entries.
+            full_id = f"{media_id}:1:1"
+            id, season, episode = parse_media_id(media_type, full_id)
+
+            metadata, _ = await metadata_scraper.fetch_metadata_and_aliases(
+                media_type, full_id, id, season, episode
+            )
+
+            title = media_id
+            year = None
+            year_end = None
+            if metadata is not None:
+                title = metadata["title"]
+                year = metadata["year"]
+                year_end = metadata["year_end"]
+
+            now = time.time()
+            await database.execute(
+                """
+                INSERT INTO background_scraper_items
+                (media_id, media_type, title, year, year_end, priority_score, status,
+                 consecutive_failures, created_at, updated_at)
+                VALUES
+                (:media_id, :media_type, :title, :year, :year_end, 9999.0, 'discovered',
+                 0, :now, :now)
+                ON CONFLICT (media_id) DO UPDATE SET
+                    status = 'discovered',
+                    priority_score = 9999.0,
+                    consecutive_failures = 0,
+                    next_retry_at = NULL,
+                    updated_at = :now
+                """,
+                {
+                    "media_id": media_id,
+                    "media_type": media_type,
+                    "title": title,
+                    "year": year,
+                    "year_end": year_end,
+                    "now": now,
+                },
+            )
+
+            return JSONResponse(
+                {
+                    "success": True,
+                    "message": f"Queued {title} ({media_id}) for immediate scraping",
+                    "title": title,
+                }
+            )
 
     except Exception as e:
         logger.error(f"Admin scrape failed for {media_id}: {e}")
