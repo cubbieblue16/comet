@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date as _date
 
 import orjson
 from RTN import DefaultRanking, ParsedData
@@ -216,6 +217,17 @@ class TorrentManager:
                 )
             if not self._matches_requested_scope(
                 parsed_data, reject_unknown_override=reject_override
+            ):
+                continue
+
+            # Reboot/revival protection: reject cached torrents without a year
+            # for brand-new series (same logic as filter_worker).
+            if (
+                self.year
+                and not parsed_data.year
+                and not self.year_end
+                and self.media_type == "series"
+                and self.year >= _date.today().year - 1
             ):
                 continue
 

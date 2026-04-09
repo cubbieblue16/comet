@@ -1,4 +1,5 @@
 from collections import OrderedDict, defaultdict
+from datetime import date as _date
 from threading import Event, Lock
 
 from pydantic import ValidationError
@@ -241,6 +242,15 @@ def filter_worker(
     tz_aliases.add(title_scrubbed)
 
     ez_aliases_normalized = list(tz_aliases)
+    min_year = 0
+    max_year = _date.today().year + 1
+
+    if year:
+        if year_end:
+            min_year = year
+            max_year = year_end
+        else:
+            min_year = year - 1
 
     for torrent in torrents:
         torrent_title = torrent["title"]
@@ -300,6 +310,33 @@ def filter_worker(
                             f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
                         )
                         continue
+
+        if year and parsed.year:
+            if not (min_year <= parsed.year <= max_year):
+                if year_end:
+                    expected = f"{year}-{year_end}"
+                else:
+                    expected = f">={min_year}"
+
+                _log_exclusion(
+                    f"📅 Rejected (Year Mismatch) | {torrent_title} | Year: {parsed.year} | Expected: {expected}"
+                )
+                continue
+
+        # Reboot/revival protection: for a brand-new series, require the
+        # year in the torrent filename.  Without it, there is no way to
+        # distinguish old same-named shows (e.g. Scrubs 2001 vs 2026).
+        if (
+            year
+            and not parsed.year
+            and not year_end
+            and media_type == "series"
+            and year >= _date.today().year - 1
+        ):
+            _log_exclusion(
+                f"📅 Rejected (No Year for New Show) | {torrent_title} | Show Year: {year}"
+            )
+            continue
 
         torrent["parsed"] = parsed
         results.append(torrent)
