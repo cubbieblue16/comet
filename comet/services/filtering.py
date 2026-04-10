@@ -333,15 +333,20 @@ def filter_worker(
                 )
                 continue
 
-        # Reboot/revival protection: for a brand-new series, require the
-        # year in the torrent filename.  Without it, there is no way to
-        # distinguish old same-named shows (e.g. Scrubs 2001 vs 2026).
+        # Reboot/revival protection: for a brand-new SINGLE-WORD-titled
+        # series, require the year in the torrent filename.  Without it
+        # there is no way to distinguish old same-named shows (e.g. Scrubs
+        # 2001 vs 2026).  Multi-word titles are already disambiguated by
+        # the alias match requiring the full title to appear in the
+        # torrent, so this gate is skipped for them (otherwise real
+        # torrents like "Daredevil.Born.Again.S02E04" get rejected).
         if (
             year
             and not parsed.year
             and not year_end
             and media_type == "series"
             and year >= _date.today().year - 1
+            and len(title_scrubbed.split()) <= 1
         ):
             _log_exclusion(
                 f"📅 Rejected (No Year for New Show) | {torrent_title} | Show Year: {year}"

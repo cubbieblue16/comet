@@ -221,13 +221,16 @@ class TorrentManager:
                 continue
 
             # Reboot/revival protection: reject cached torrents without a year
-            # for brand-new series (same logic as filter_worker).
+            # for brand-new SINGLE-WORD-titled series (same logic as
+            # filter_worker).  Multi-word titles are disambiguated by the
+            # alias match upstream, so the year gate would be over-broad.
             if (
                 self.year
                 and not parsed_data.year
                 and not self.year_end
                 and self.media_type == "series"
                 and self.year >= _date.today().year - 1
+                and len(self.title.split()) <= 1
             ):
                 continue
 
