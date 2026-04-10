@@ -29,11 +29,21 @@ def quick_alias_match(
     # e.g. alias "wwe smackdown" in torrent "wwe smackdown 2026 03 20 1080p"
     if any(alias in text_normalized for alias in ez_aliases_normalized):
         return True
-    # Reverse: parsed title is substring of an alias
-    # e.g. parsed "smackdown" is in alias "wwe smackdown"
+    # Reverse: parsed title is substring of an alias AND every other word in
+    # the alias also appears in the torrent title.  The extra-word check
+    # prevents false positives like parsed "daredevil" matching alias
+    # "daredevil born again" — the torrent must contain "born" and "again"
+    # to earn the match.  Still allows parsed "smackdown" to match alias
+    # "wwe smackdown" when the torrent title contains "wwe".
     if parsed_title_normalized and len(parsed_title_normalized) >= 4:
-        if any(parsed_title_normalized in alias for alias in ez_aliases_normalized):
-            return True
+        text_words = set(text_normalized.split())
+        parsed_words = set(parsed_title_normalized.split())
+        for alias in ez_aliases_normalized:
+            if parsed_title_normalized in alias:
+                alias_words = set(alias.split())
+                extra_words = alias_words - parsed_words
+                if all(word in text_words for word in extra_words):
+                    return True
     return False
 
 
