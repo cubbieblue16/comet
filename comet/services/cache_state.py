@@ -1,3 +1,4 @@
+import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -270,8 +271,10 @@ class CacheStateManager:
         Returns:
             CacheCheckResult with state, decision, and lock info
         """
-        fresh_count = await self.get_fresh_torrent_count()
-        is_first = await self.check_is_first_search()
+        fresh_count, is_first = await asyncio.gather(
+            self.get_fresh_torrent_count(),
+            self.check_is_first_search(),
+        )
 
         state = self._determine_state(fresh_count, torrent_count, is_first)
 

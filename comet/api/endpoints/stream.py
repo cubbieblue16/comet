@@ -480,9 +480,33 @@ async def stream(
                 is_empty=True,
             )
 
-    metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
-        media_type, media_id, id, season, episode
+    # For non-kitsu IMDb series we can resolve the episode air date in
+    # parallel with the metadata fetch since both inputs (id, season,
+    # episode) are already known from parse_media_id().
+    is_kitsu = media_id.startswith("kitsu:")
+    can_early_air_date = (
+        not is_kitsu
+        and media_type == "series"
+        and season is not None
+        and episode is not None
+        and id.startswith("tt")
     )
+
+    if can_early_air_date:
+        metadata_task = metadata_scraper.fetch_metadata_and_aliases(
+            media_type, media_id, id, season, episode
+        )
+        air_date_task = EpisodeIndexService(session).get_target_air_date(
+            id, season, episode
+        )
+        (metadata, aliases), target_air_date = await asyncio.gather(
+            metadata_task, air_date_task
+        )
+    else:
+        metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
+            media_type, media_id, id, season, episode
+        )
+        target_air_date = None
 
     if metadata is None:
         logger.log("SCRAPER", f"❌ Failed to fetch metadata for {media_id}")
@@ -514,7 +538,6 @@ async def stream(
     media_only_id = id
     ip = get_client_ip(request)
 
-    is_kitsu = media_id.startswith("kitsu:")
     search_episode = episode
     search_season = season
 
@@ -564,13 +587,15 @@ async def stream(
         and search_episode is not None
         and media_only_id.startswith("tt")
     )
-    target_air_date = None
-    if strict_episode_matching:
+    # For kitsu or cases where season/episode changed after kitsu mapping,
+    # resolve the air date now if it wasn't fetched in the parallel path.
+    if strict_episode_matching and target_air_date is None:
         target_air_date = await EpisodeIndexService(session).get_target_air_date(
             media_only_id,
             search_season,
             search_episode,
         )
+    if strict_episode_matching:
         if target_air_date:
             logger.log(
                 "SCRAPER",
