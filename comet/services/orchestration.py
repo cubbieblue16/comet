@@ -92,10 +92,12 @@ class TorrentManager:
     async def scrape_torrents(
         self,
     ):
-        # Look up air date for date-based scraper queries
-        air_date = None
+        # Reuse the air date already resolved by EpisodeIndexService upstream
+        # to avoid duplicate TMDB API calls via DateEpisodeResolver.
+        air_date = self.target_air_date
         if (
-            self.date_resolver
+            air_date is None
+            and self.date_resolver
             and self.media_only_id
             and self.search_season is not None
             and self.search_episode is not None
