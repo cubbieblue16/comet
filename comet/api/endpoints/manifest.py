@@ -23,6 +23,10 @@ router = APIRouter()
     description="Returns the add-on manifest with existing configuration.",
 )
 async def manifest(request: Request, b64config: str = None):
+    id_prefixes = ["tt", "kitsu"]
+    if settings.ENABLE_TMDB_IDS:
+        id_prefixes.append("tmdb")
+
     base_manifest = {
         "id": settings.ADDON_ID,
         "description": "Stremio's fastest torrent/debrid search add-on.",
@@ -32,7 +36,7 @@ async def manifest(request: Request, b64config: str = None):
             {
                 "name": "stream",
                 "types": ["movie", "series"],
-                "idPrefixes": ["tt", "kitsu"],
+                "idPrefixes": id_prefixes,
             }
         ],
         "types": ["movie", "series", "anime", "other"],
