@@ -193,3 +193,80 @@ def test_metadata_manager_extracts_tmdb_provider():
     assert MetadataScraper._extract_provider("tmdb:12345:1:1") == "tmdb"
     assert MetadataScraper._extract_provider("tt1234567") == "imdb"
     assert MetadataScraper._extract_provider("kitsu:1") == "kitsu"
+
+
+@pytest.mark.asyncio
+async def test_tmdb_override_short_circuits_before_api_call(monkeypatch):
+    from comet.core.models import settings
+    from comet.metadata import tmdb as tmdb_module
+
+    monkeypatch.setattr(
+        settings,
+        "TMDB_TO_IMDB_OVERRIDES",
+        '{"1658464":"tt35885611","1674749":"tt35885611"}',
+    )
+    tmdb_module._overrides_cache = None
+    tmdb_module._overrides_cache_source = None
+
+    mock_session = MagicMock()
+    # If the override path works, session.get must never be called.
+    mock_session.get = MagicMock(side_effect=AssertionError("should not hit TMDB API"))
+
+    api = tmdb_module.TMDBApi(mock_session)
+    assert await api.get_imdb_from_tmdb("1658464", "movie") == "tt35885611"
+    assert await api.get_imdb_from_tmdb("1674749", "movie") == "tt35885611"
+
+
+@pytest.mark.asyncio
+async def test_tmdb_override_missing_id_still_calls_api(monkeypatch):
+    from comet.core.models import settings
+    from comet.metadata import tmdb as tmdb_module
+
+    monkeypatch.setattr(
+        settings, "TMDB_TO_IMDB_OVERRIDES", '{"99":"tt1111111"}'
+    )
+    tmdb_module._overrides_cache = None
+    tmdb_module._overrides_cache_source = None
+
+    mock_session = _mock_session_returning_json(200, {"imdb_id": "tt2222222"})
+    api = tmdb_module.TMDBApi(mock_session)
+    # 1658464 isn't in the override map; should fall through to TMDB API.
+    assert await api.get_imdb_from_tmdb("1658464", "movie") == "tt2222222"
+
+
+def test_tmdb_override_parser_rejects_non_tt_values(monkeypatch):
+    from comet.core.models import settings
+    from comet.metadata import tmdb as tmdb_module
+
+    monkeypatch.setattr(
+        settings,
+        "TMDB_TO_IMDB_OVERRIDES",
+        '{"1":"tt1234567","2":"notanid","3":""}',
+    )
+    tmdb_module._overrides_cache = None
+    tmdb_module._overrides_cache_source = None
+
+    result = tmdb_module._load_tmdb_to_imdb_overrides()
+    assert result == {"1": "tt1234567"}
+
+
+def test_tmdb_override_parser_handles_invalid_json(monkeypatch):
+    from comet.core.models import settings
+    from comet.metadata import tmdb as tmdb_module
+
+    monkeypatch.setattr(settings, "TMDB_TO_IMDB_OVERRIDES", "not json at all")
+    tmdb_module._overrides_cache = None
+    tmdb_module._overrides_cache_source = None
+
+    assert tmdb_module._load_tmdb_to_imdb_overrides() == {}
+
+
+def test_tmdb_override_parser_empty_env_returns_empty_map(monkeypatch):
+    from comet.core.models import settings
+    from comet.metadata import tmdb as tmdb_module
+
+    monkeypatch.setattr(settings, "TMDB_TO_IMDB_OVERRIDES", "")
+    tmdb_module._overrides_cache = None
+    tmdb_module._overrides_cache_source = None
+
+    assert tmdb_module._load_tmdb_to_imdb_overrides() == {}

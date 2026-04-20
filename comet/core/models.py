@@ -187,6 +187,10 @@ class AppSettings(BaseSettings):
     PERMISSIVE_EPISODE_MATCHING: Optional[bool] = True
     AUTO_SCRAPE_DEBRID_ACCOUNT: Optional[bool] = False
     ENABLE_TMDB_IDS: Optional[bool] = True
+    # JSON mapping of TMDB IDs to IMDB IDs, used when TMDB itself has no
+    # imdb_id set (common for wrestling PPVs, live events, niche items).
+    # Example: '{"1658464":"tt35885611","1674749":"tt35885611"}'
+    TMDB_TO_IMDB_OVERRIDES: Optional[str] = ""
     BACKGROUND_SCRAPER_ENABLED: Optional[bool] = False
     BACKGROUND_SCRAPER_CONCURRENT_WORKERS: Optional[int] = 1
     BACKGROUND_SCRAPER_INTERVAL: Optional[int] = 3600

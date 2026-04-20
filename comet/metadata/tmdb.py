@@ -1,9 +1,57 @@
 import aiohttp
+import orjson
 
 from comet.core.logger import logger
 from comet.core.models import settings
 
 DEFAULT_TMDB_READ_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJlNTkxMmVmOWFhM2IxNzg2Zjk3ZTE1NWY1YmQ3ZjY1MSIsInN1YiI6IjY1M2NjNWUyZTg5NGE2MDBmZjE2N2FmYyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.xrIXsMFJpI1o1j5g2QpQcFP1X3AfRjFA5FlBFO5Naw8"
+
+
+_overrides_cache: dict[str, str] | None = None
+_overrides_cache_source: str | None = None
+
+
+def _load_tmdb_to_imdb_overrides() -> dict[str, str]:
+    """Parse TMDB_TO_IMDB_OVERRIDES env var into {tmdb_id: imdb_id}.
+
+    Supports JSON object form only. Invalid entries are logged and skipped
+    rather than failing the whole map. Result is cached until the raw env
+    value changes (supports live config reload).
+    """
+    global _overrides_cache, _overrides_cache_source
+    raw = (settings.TMDB_TO_IMDB_OVERRIDES or "").strip()
+
+    if _overrides_cache is not None and _overrides_cache_source == raw:
+        return _overrides_cache
+
+    parsed: dict[str, str] = {}
+    if raw:
+        try:
+            data = orjson.loads(raw)
+        except orjson.JSONDecodeError as e:
+            logger.warning(f"TMDB_TO_IMDB_OVERRIDES is not valid JSON: {e}")
+            data = None
+
+        if isinstance(data, dict):
+            for tmdb_id, imdb_id in data.items():
+                tmdb_key = str(tmdb_id).strip()
+                imdb_val = str(imdb_id).strip() if imdb_id is not None else ""
+                if not tmdb_key or not imdb_val.startswith("tt"):
+                    logger.warning(
+                        f"TMDB_TO_IMDB_OVERRIDES: skipping invalid entry "
+                        f"{tmdb_id!r}={imdb_id!r} (IMDB IDs must start with 'tt')"
+                    )
+                    continue
+                parsed[tmdb_key] = imdb_val
+        elif data is not None:
+            logger.warning(
+                "TMDB_TO_IMDB_OVERRIDES must be a JSON object, got "
+                f"{type(data).__name__}"
+            )
+
+    _overrides_cache = parsed
+    _overrides_cache_source = raw
+    return parsed
 
 
 class TMDBApi:
@@ -160,7 +208,20 @@ class TMDBApi:
             return None
 
     async def get_imdb_from_tmdb(self, tmdb_id: str, media_type: str):
-        """Return the IMDB ID (tt...) for a TMDB item, or None if unavailable."""
+        """Return the IMDB ID (tt...) for a TMDB item, or None if unavailable.
+
+        Checks manual TMDB_TO_IMDB_OVERRIDES first (for items TMDB hasn't
+        linked to IMDB), then falls back to TMDB's external_ids lookup.
+        """
+        overrides = _load_tmdb_to_imdb_overrides()
+        override = overrides.get(str(tmdb_id).strip())
+        if override:
+            logger.log(
+                "SCRAPER",
+                f"🧷 TMDB_TO_IMDB_OVERRIDES: tmdb:{tmdb_id} -> {override}",
+            )
+            return override
+
         external_ids = await self.get_external_ids(tmdb_id, media_type)
         if not external_ids:
             return None
