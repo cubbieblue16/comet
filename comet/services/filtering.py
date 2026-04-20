@@ -60,6 +60,24 @@ def _significant_word_overlap(expected_normalized: str, text_normalized: str) ->
     return matches / len(significant) >= 0.5
 
 
+def _digit_tokens(normalized: str) -> list[str]:
+    return [t for t in normalized.split() if t.isdigit()]
+
+
+def _digit_tokens_match(expected_normalized: str, text_normalized: str) -> bool:
+    """When the expected title contains numeric tokens (e.g. '42' in
+    'WrestleMania 42', '300' in 'UFC 300', '9' in 'Fast 9'), those digits must
+    appear as whole-word tokens in the torrent title. Numbers are usually the
+    key differentiator between sibling events/sequels — without this, loose
+    matchers happily accept WrestleMania 40/41 for a WrestleMania 42 query.
+    """
+    expected_digits = _digit_tokens(expected_normalized)
+    if not expected_digits:
+        return True
+    text_words = set(text_normalized.split())
+    return all(d in text_words for d in expected_digits)
+
+
 def scrub(t: str):
     return " ".join(normalize_title(t).split())
 
@@ -300,6 +318,15 @@ def filter_worker(
                             f"❌ Rejected (Title Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title}"
                         )
                         continue
+
+        # Hard gate: if the expected title has numeric tokens, require them
+        # in the torrent title. Runs after the match cascade so it also rejects
+        # near-matches that the Levenshtein/overlap path would otherwise pass.
+        if not _digit_tokens_match(title_scrubbed, scrubbed_torrent):
+            _log_exclusion(
+                f"🔢 Rejected (Number Mismatch) | {torrent_title} | Parsed: {parsed.parsed_title} | Expected: {title} (requires {_digit_tokens(title_scrubbed)})"
+            )
+            continue
 
         torrent["parsed"] = parsed
         results.append(torrent)
