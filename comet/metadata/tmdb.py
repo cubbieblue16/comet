@@ -136,3 +136,82 @@ class TMDBApi:
         except Exception as e:
             logger.error(f"TMDB: Error getting watch providers for {tmdb_id}: {e}")
             return None
+
+    async def get_external_ids(self, tmdb_id: str, media_type: str):
+        """Fetch external IDs (imdb_id, tvdb_id, ...) for a TMDB item.
+
+        media_type: "movie" or "series" (mapped to TMDB's "tv" endpoint).
+        Returns dict like {"imdb_id": "tt1234567", "tvdb_id": 1234, ...} or None on failure.
+        """
+        tmdb_path = "movie" if media_type == "movie" else "tv"
+        try:
+            url = f"{self.base_url}/{tmdb_path}/{tmdb_id}/external_ids"
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status != 200:
+                    logger.warning(
+                        f"TMDB: external_ids for {tmdb_path}/{tmdb_id} returned HTTP {response.status}"
+                    )
+                    return None
+                return await response.json()
+        except Exception as e:
+            logger.error(
+                f"TMDB: Error getting external_ids for {tmdb_path}/{tmdb_id}: {e}"
+            )
+            return None
+
+    async def get_imdb_from_tmdb(self, tmdb_id: str, media_type: str):
+        """Return the IMDB ID (tt...) for a TMDB item, or None if unavailable."""
+        external_ids = await self.get_external_ids(tmdb_id, media_type)
+        if not external_ids:
+            return None
+        imdb_id = external_ids.get("imdb_id")
+        if not imdb_id or not isinstance(imdb_id, str) or not imdb_id.startswith("tt"):
+            return None
+        return imdb_id
+
+    async def get_movie_metadata(self, tmdb_id: str):
+        """Return (title, year, year_end) for a TMDB movie, or (None, None, None) on failure."""
+        try:
+            url = f"{self.base_url}/movie/{tmdb_id}"
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status != 200:
+                    logger.warning(
+                        f"TMDB: movie/{tmdb_id} returned HTTP {response.status}"
+                    )
+                    return None, None, None
+                data = await response.json()
+
+            title = data.get("title") or data.get("original_title")
+            release_date = data.get("release_date") or ""
+            year = None
+            if release_date[:4].isdigit():
+                year = int(release_date[:4])
+            return title, year, None
+        except Exception as e:
+            logger.error(f"TMDB: Error getting movie metadata for {tmdb_id}: {e}")
+            return None, None, None
+
+    async def get_tv_metadata(self, tmdb_id: str):
+        """Return (title, year_first_aired, year_last_aired) for a TMDB TV show."""
+        try:
+            url = f"{self.base_url}/tv/{tmdb_id}"
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status != 200:
+                    logger.warning(
+                        f"TMDB: tv/{tmdb_id} returned HTTP {response.status}"
+                    )
+                    return None, None, None
+                data = await response.json()
+
+            title = data.get("name") or data.get("original_name")
+            first_air_date = data.get("first_air_date") or ""
+            last_air_date = data.get("last_air_date") or ""
+            year = int(first_air_date[:4]) if first_air_date[:4].isdigit() else None
+            year_end = int(last_air_date[:4]) if last_air_date[:4].isdigit() else None
+            # Ongoing shows: don't report a year_end equal to first-air year unless ended
+            if data.get("in_production") and year_end == year:
+                year_end = None
+            return title, year, year_end
+        except Exception as e:
+            logger.error(f"TMDB: Error getting tv metadata for {tmdb_id}: {e}")
+            return None, None, None

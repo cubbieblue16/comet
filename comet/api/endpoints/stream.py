@@ -12,6 +12,7 @@ from comet.debrid.manager import get_debrid_extension
 from comet.metadata.episode_index import EpisodeIndexService
 from comet.metadata.filter import release_filter
 from comet.metadata.manager import MetadataScraper
+from comet.metadata.tmdb import TMDBApi
 from comet.services.anime import anime_mapper
 from comet.services.cache_state import CacheStateManager
 from comet.services.debrid import DebridService
@@ -404,7 +405,7 @@ async def stream(
     if media_type not in ["movie", "series"]:
         return _build_stream_response(request, {"streams": []}, is_empty=True)
 
-    if "tmdb:" in media_id:
+    if media_id.startswith("tmdb:") and not settings.ENABLE_TMDB_IDS:
         return _build_stream_response(request, {"streams": []}, is_empty=True)
 
     media_id = media_id.replace("imdb_id:", "")
@@ -455,6 +456,33 @@ async def stream(
 
     session = await http_client_manager.get_session()
     metadata_scraper = MetadataScraper(session)
+
+    # TMDB IDs: try to resolve to an IMDB ID so we can reuse Torrentio/Comet/
+    # IMDB-keyed caches. If no IMDB mapping exists (common for wrestling PPVs,
+    # foreign films, etc.), leave the tmdb: prefix in place — metadata and
+    # scraping will proceed by title via the TMDB provider path.
+    if media_id.startswith("tmdb:"):
+        tmdb_only_id, tmdb_season, tmdb_episode = parse_media_id(media_type, media_id)
+        resolved_imdb_id = await TMDBApi(session).get_imdb_from_tmdb(
+            tmdb_only_id, media_type
+        )
+        if resolved_imdb_id:
+            if media_type == "series" and tmdb_season is not None:
+                if tmdb_episode is not None:
+                    media_id = f"{resolved_imdb_id}:{tmdb_season}:{tmdb_episode}"
+                else:
+                    media_id = f"{resolved_imdb_id}:{tmdb_season}"
+            else:
+                media_id = resolved_imdb_id
+            logger.log(
+                "SCRAPER",
+                f"🔁 Resolved tmdb:{tmdb_only_id} to {resolved_imdb_id}",
+            )
+        else:
+            logger.log(
+                "SCRAPER",
+                f"🆔 No IMDB mapping for tmdb:{tmdb_only_id} - scraping by title",
+            )
 
     id, season, episode = parse_media_id(media_type, media_id)
 

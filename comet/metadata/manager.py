@@ -13,6 +13,7 @@ from comet.utils.parsing import parse_media_id
 
 from .imdb import get_imdb_metadata
 from .kitsu import get_kitsu_metadata
+from .tmdb import TMDBApi
 from .trakt import get_trakt_aliases
 
 _CACHE_SELECT_QUERY = """
@@ -126,17 +127,29 @@ class MetadataScraper:
             return get_cached[0], get_cached[1]
 
         is_kitsu = provider == "kitsu"
+        is_tmdb = provider == "tmdb"
 
         metadata_task = asyncio.create_task(
-            self.get_metadata(id, season, episode, is_kitsu, media_type)
+            self.get_metadata(id, season, episode, is_kitsu, media_type, is_tmdb=is_tmdb)
         )
-        aliases_task = asyncio.create_task(self.get_aliases(media_type, id, provider))
+        # Trakt lookup only works with IMDB IDs; skip for tmdb-native lookups
+        # (aliases will be empty; scrapers fall back to the canonical TMDB title).
+        if is_tmdb:
+            aliases_task = asyncio.create_task(self._empty_aliases())
+        else:
+            aliases_task = asyncio.create_task(
+                self.get_aliases(media_type, id, provider)
+            )
         metadata, aliases = await asyncio.gather(metadata_task, aliases_task)
 
         if metadata is not None:
             aliases = await self.cache_metadata(cache_id, metadata, aliases)
 
         return metadata, aliases
+
+    @staticmethod
+    async def _empty_aliases() -> dict:
+        return {}
 
     @staticmethod
     def _extract_provider(media_id: str):
@@ -228,14 +241,26 @@ class MetadataScraper:
         }
 
     async def get_metadata(
-        self, id: str, season: int, episode: int, is_kitsu: bool, media_type: str
+        self,
+        id: str,
+        season: int,
+        episode: int,
+        is_kitsu: bool,
+        media_type: str,
+        is_tmdb: bool = False,
     ):
         if is_kitsu:
             raw_metadata = await get_kitsu_metadata(self.session, id)
             return self.normalize_metadata(raw_metadata, 1, episode)
-        else:
-            raw_metadata = await get_imdb_metadata(self.session, id, media_type)
-            return self.normalize_metadata(raw_metadata, season, episode)
+        if is_tmdb:
+            tmdb = TMDBApi(self.session)
+            if media_type == "movie":
+                title, year, year_end = await tmdb.get_movie_metadata(id)
+            else:
+                title, year, year_end = await tmdb.get_tv_metadata(id)
+            return self.normalize_metadata((title, year, year_end), season, episode)
+        raw_metadata = await get_imdb_metadata(self.session, id, media_type)
+        return self.normalize_metadata(raw_metadata, season, episode)
 
     async def fetch_aliases_with_metadata(
         self,
