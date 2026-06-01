@@ -213,6 +213,13 @@ class AppSettings(BaseSettings):
     ANIME_MAPPING_ENABLED: Optional[bool] = True
     ANIME_MAPPING_REFRESH_INTERVAL: Optional[int] = 432000
     DIGITAL_RELEASE_FILTER: Optional[bool] = False
+    # When a series episode starts playing, warm the NEXT episode's stream list +
+    # debrid availability cache in the background so it plays instantly on auto-advance.
+    PREFETCH_NEXT_EPISODE: Optional[bool] = True
+    # Also pre-resolve the next episode's playback (download) link into the cache.
+    # Adds at most one extra debrid link-gen per started episode. Set False for an
+    # availability-only warm that issues no extra link-gen calls.
+    PREFETCH_NEXT_EPISODE_RESOLVE_LINK: Optional[bool] = True
     TMDB_READ_ACCESS_TOKEN: Optional[str] = None
     TRAKT_API_KEY: Optional[str] = ""
     GLOBAL_PROXY_URL: Optional[str] = None

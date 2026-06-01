@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import mediaflow_proxy.utils.http_utils
@@ -14,6 +15,7 @@ from comet.debrid.exceptions import DebridLinkGenerationError
 from comet.debrid.manager import (build_account_key_hash, get_debrid,
                                   get_debrid_credentials)
 from comet.metadata.manager import MetadataScraper
+from comet.services.prefetch import prefetch_next_episode
 from comet.services.status_video import build_status_video_response
 from comet.services.streaming.manager import custom_handle_stream_request
 from comet.utils.http_client import http_client_manager
@@ -262,6 +264,22 @@ async def playback(
             season=season,
             episode=episode,
             download_url=download_url,
+        )
+
+    # Warm the next episode in the background so binge auto-advance is instant.
+    # Fire-and-forget: never blocks or affects this playback response.
+    if settings.PREFETCH_NEXT_EPISODE and season is not None:
+        asyncio.create_task(
+            prefetch_next_episode(
+                session=session,
+                config=config,
+                media_only_id=media_id,
+                season=season,
+                episode=episode,
+                debrid_service=debrid_service,
+                debrid_api_key=debrid_api_key,
+                ip=ip if not should_proxy else "",
+            )
         )
 
     if should_proxy:
