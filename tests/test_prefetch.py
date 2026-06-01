@@ -77,3 +77,42 @@ def test_mark_warmed_prunes_stale_entries():
     prefetch._mark_warmed("new|torbox", now=2000.0, ttl=300)
     assert "old|torbox" not in prefetch._RECENTLY_WARMED
     assert "new|torbox" in prefetch._RECENTLY_WARMED
+
+
+@pytest.mark.asyncio
+async def test_warm_next_episode_returns_early_when_no_next_episode(monkeypatch):
+    """If metadata says there's no next episode, we must not build a TorrentManager."""
+    from unittest.mock import AsyncMock, MagicMock
+    import comet.services.prefetch as prefetch
+
+    # Metadata lookup says "no next episode".
+    fake_scraper = MagicMock()
+    fake_scraper.fetch_metadata_and_aliases = AsyncMock(return_value=(None, {}))
+    monkeypatch.setattr(prefetch, "MetadataScraper", lambda session: fake_scraper)
+
+    fake_index = MagicMock()
+    fake_index.get_target_air_date = AsyncMock(return_value=None)
+    monkeypatch.setattr(prefetch, "EpisodeIndexService", lambda session: fake_index)
+
+    # If the early-return breaks, this would be constructed -> blow up the test.
+    def _boom(*a, **k):
+        raise AssertionError("TorrentManager must not be built when no next episode")
+
+    monkeypatch.setattr(prefetch, "TorrentManager", _boom)
+
+    await prefetch._warm_next_episode(
+        session=MagicMock(),
+        config={"removeTrash": False},
+        media_only_id="tt0386676",
+        next_media_id="tt0386676:3:13",
+        season=3,
+        next_episode=13,
+        debrid_entries=[{"service": "torbox", "apiKey": "k"}],
+        debrid_service="torbox",
+        debrid_api_key="k",
+        ip="",
+        played_hash="abc",
+    )
+
+    fake_scraper.fetch_metadata_and_aliases.assert_awaited_once()
+    fake_index.get_target_air_date.assert_awaited_once()

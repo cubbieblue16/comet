@@ -18,6 +18,7 @@ affect the playback that triggered it. Gated behind ``PREFETCH_NEXT_EPISODE``
 (master) and ``PREFETCH_NEXT_EPISODE_RESOLVE_LINK`` (Part B).
 """
 
+import asyncio
 import time
 
 from comet.core.database import (DOWNLOAD_LINK_CACHE_TTL,
@@ -165,8 +166,12 @@ async def _warm_next_episode(
     played_hash: str | None,
 ):
     metadata_scraper = MetadataScraper(session)
-    metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
-        "series", next_media_id, media_only_id, season, next_episode
+    episode_index = EpisodeIndexService(session)
+    (metadata, aliases), target_air_date = await asyncio.gather(
+        metadata_scraper.fetch_metadata_and_aliases(
+            "series", next_media_id, media_only_id, season, next_episode
+        ),
+        episode_index.get_target_air_date(media_only_id, season, next_episode),
     )
     # No metadata -> next episode doesn't exist (end of season). Nothing to warm.
     if metadata is None or metadata.get("episode") is None:
@@ -176,9 +181,6 @@ async def _warm_next_episode(
         return
 
     title = metadata["title"]
-    target_air_date = await EpisodeIndexService(session).get_target_air_date(
-        media_only_id, season, next_episode
-    )
 
     remove_adult_content = settings.REMOVE_ADULT_CONTENT and config["removeTrash"]
     torrent_manager = TorrentManager(
