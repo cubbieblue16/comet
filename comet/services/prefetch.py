@@ -33,6 +33,37 @@ from comet.services.lock import DistributedLock
 from comet.services.orchestration import TorrentManager
 
 
+def _select_target_hash(
+    ranked_hashes,
+    torrents: dict,
+    service_cache_status: dict,
+    debrid_service: str,
+    played_hash: str | None,
+) -> str | None:
+    """Pick the info_hash to pre-resolve a download link for.
+
+    Stremio's binge auto-advance reuses the bingeGroup of the episode the user
+    just played, and Comet's bingeGroup embeds the info_hash. For a season pack
+    (one hash serves every episode) the next episode is therefore requested with
+    the SAME hash the user just played. So if that played hash is also a cached
+    candidate for N+1, resolve THAT hash -- it's the one auto-advance will ask
+    for. Otherwise fall back to the highest-ranked candidate cached on this
+    service (the per-episode-torrent / no-played-hash case).
+    """
+
+    def _cached(info_hash: str) -> bool:
+        status = service_cache_status.get(info_hash)
+        return bool(status and status.get(debrid_service))
+
+    if played_hash and played_hash in torrents and _cached(played_hash):
+        return played_hash
+
+    for info_hash in ranked_hashes:
+        if _cached(info_hash):
+            return info_hash
+    return None
+
+
 async def prefetch_next_episode(
     *,
     session,
@@ -43,6 +74,7 @@ async def prefetch_next_episode(
     debrid_service: str,
     debrid_api_key: str,
     ip: str,
+    played_hash: str | None = None,
 ):
     """Entry point. Decides whether to warm episode N+1, then does it under a lock."""
     if not settings.PREFETCH_NEXT_EPISODE:
@@ -82,6 +114,7 @@ async def prefetch_next_episode(
             debrid_service=debrid_service,
             debrid_api_key=debrid_api_key,
             ip=ip,
+            played_hash=played_hash,
         )
     except Exception as e:
         logger.warning(f"Next-episode prefetch failed for {next_media_id}: {e}")
@@ -101,6 +134,7 @@ async def _warm_next_episode(
     debrid_service: str,
     debrid_api_key: str,
     ip: str,
+    played_hash: str | None,
 ):
     metadata_scraper = MetadataScraper(session)
     metadata, aliases = await metadata_scraper.fetch_metadata_and_aliases(
@@ -187,6 +221,7 @@ async def _warm_next_episode(
         debrid_service=debrid_service,
         debrid_api_key=debrid_api_key,
         ip=ip,
+        played_hash=played_hash,
     )
 
 
@@ -205,6 +240,7 @@ async def _resolve_next_episode_link(
     debrid_service: str,
     debrid_api_key: str,
     ip: str,
+    played_hash: str | None,
 ):
     """Pre-resolve the download link for the top cached candidate of N+1.
 
@@ -221,13 +257,13 @@ async def _resolve_next_episode_link(
         config["removeTrash"],
     )
 
-    target_hash = None
-    for info_hash in torrent_manager.ranked_torrents:
-        status = service_cache_status.get(info_hash)
-        if status and status.get(debrid_service):
-            target_hash = info_hash
-            break
-
+    target_hash = _select_target_hash(
+        torrent_manager.ranked_torrents,
+        torrent_manager.torrents,
+        service_cache_status,
+        debrid_service,
+        played_hash,
+    )
     if target_hash is None:
         return  # nothing cached for the next episode on this service
 

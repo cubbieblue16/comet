@@ -279,6 +279,7 @@ async def playback(
                 debrid_service=debrid_service,
                 debrid_api_key=debrid_api_key,
                 ip=ip if not should_proxy else "",
+                played_hash=hash,
             )
         )
 
