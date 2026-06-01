@@ -224,6 +224,10 @@ class AppSettings(BaseSettings):
     # seconds. Stops repeated /playback/ hits (seeks, cached fast-path) from
     # re-running the full warm + spamming forced-primary lock writes.
     PREFETCH_REWARM_TTL: Optional[int] = 300
+    # Cache StremThru's positive "premium" verdict per store creds for this many
+    # seconds to avoid a GET /user on every availability check during a binge.
+    # Only the success verdict is cached; auth failures always re-check.
+    STREMTHRU_PREMIUM_CACHE_TTL: Optional[int] = 600
     TMDB_READ_ACCESS_TOKEN: Optional[str] = None
     TRAKT_API_KEY: Optional[str] = ""
     GLOBAL_PROXY_URL: Optional[str] = None

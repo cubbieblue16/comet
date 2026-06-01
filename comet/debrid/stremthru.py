@@ -1,4 +1,5 @@
 import asyncio
+import time
 from urllib.parse import quote, unquote
 
 import aiohttp
@@ -14,6 +15,11 @@ from comet.services.filtering import quick_alias_match
 from comet.services.torrent_manager import torrent_update_queue
 from comet.utils.parsing import (ensure_multi_language, is_video,
                                  match_parsed_episode_target, parse_media_id)
+
+
+# Cache of positive premium verdicts: "{store}:{token}" -> expiry timestamp.
+# Avoids a GET /user on every get_availability() call during a binge.
+_PREMIUM_CACHE: dict[str, float] = {}
 
 
 def batch_parse(filenames):
@@ -164,6 +170,11 @@ class StremThru:
         )
 
     async def check_premium(self):
+        cache_key = f"{self.store_name}:{self.store_token}"
+        cached_until = _PREMIUM_CACHE.get(cache_key)
+        if cached_until is not None and cached_until > time.time():
+            return
+
         try:
             response = await self.session.get(
                 f"{self.base_url}/user?client_ip={self.client_ip}",
@@ -189,6 +200,9 @@ class StremThru:
                 self.store_name,
                 f"{self.store_name}: Failed to check account status.\n{e}",
             )
+
+        # Cache only the positive verdict; auth failures above re-check every time.
+        _PREMIUM_CACHE[cache_key] = time.time() + settings.STREMTHRU_PREMIUM_CACHE_TTL
 
     async def get_instant(self, magnets: list):
         try:
