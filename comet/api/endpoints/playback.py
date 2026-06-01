@@ -24,6 +24,10 @@ from comet.utils.parsing import parse_optional_int
 
 router = APIRouter()
 
+# Strong refs to fire-and-forget prefetch tasks so the loop can't GC them
+# mid-flight (asyncio keeps only a weak ref to bare create_task() results).
+_PREFETCH_TASKS: set = set()
+
 
 async def cache_download_link(
     *,
@@ -269,7 +273,7 @@ async def playback(
     # Warm the next episode in the background so binge auto-advance is instant.
     # Fire-and-forget: never blocks or affects this playback response.
     if settings.PREFETCH_NEXT_EPISODE and season is not None:
-        asyncio.create_task(
+        prefetch_task = asyncio.create_task(
             prefetch_next_episode(
                 session=session,
                 config=config,
@@ -282,6 +286,8 @@ async def playback(
                 played_hash=hash,
             )
         )
+        _PREFETCH_TASKS.add(prefetch_task)
+        prefetch_task.add_done_callback(_PREFETCH_TASKS.discard)
 
     if should_proxy:
         return await custom_handle_stream_request(
