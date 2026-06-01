@@ -220,6 +220,10 @@ class AppSettings(BaseSettings):
     # Adds at most one extra debrid link-gen per started episode. Set False for an
     # availability-only warm that issues no extra link-gen calls.
     PREFETCH_NEXT_EPISODE_RESOLVE_LINK: Optional[bool] = True
+    # Skip re-warming the same next episode if it was warmed within this many
+    # seconds. Stops repeated /playback/ hits (seeks, cached fast-path) from
+    # re-running the full warm + spamming forced-primary lock writes.
+    PREFETCH_REWARM_TTL: Optional[int] = 300
     TMDB_READ_ACCESS_TOKEN: Optional[str] = None
     TRAKT_API_KEY: Optional[str] = ""
     GLOBAL_PROXY_URL: Optional[str] = None

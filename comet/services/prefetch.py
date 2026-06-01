@@ -33,6 +33,26 @@ from comet.services.lock import DistributedLock
 from comet.services.orchestration import TorrentManager
 
 
+# Best-effort in-memory guard against re-warming the same next episode on every
+# /playback/ hit. Keyed by "{next_media_id}|{debrid_service}" -> last-warm time.
+# Single worker (FASTAPI_WORKERS=1), so a plain dict is sufficient; a miss just
+# falls back to the pre-guard behavior.
+_RECENTLY_WARMED: dict[str, float] = {}
+
+
+def _recently_warmed(key: str, now: float, ttl: int) -> bool:
+    ts = _RECENTLY_WARMED.get(key)
+    return ts is not None and (now - ts) < ttl
+
+
+def _mark_warmed(key: str, now: float, ttl: int) -> None:
+    _RECENTLY_WARMED[key] = now
+    # Bound memory: drop entries older than the TTL on each write.
+    stale = [k for k, t in _RECENTLY_WARMED.items() if now - t >= ttl]
+    for k in stale:
+        _RECENTLY_WARMED.pop(k, None)
+
+
 def _select_target_hash(
     ranked_hashes,
     torrents: dict,
@@ -96,6 +116,13 @@ async def prefetch_next_episode(
     next_episode = episode + 1
     next_media_id = f"{media_only_id}:{season}:{next_episode}"
 
+    # Skip if we warmed this exact next episode very recently (repeated /playback/
+    # hits, seeks). Checked before the lock so we avoid a forced-primary DB write.
+    warm_key = f"{next_media_id}|{debrid_service}"
+    rewarm_ttl = settings.PREFETCH_REWARM_TTL
+    if _recently_warmed(warm_key, time.time(), rewarm_ttl):
+        return
+
     # Separate lock namespace so a prefetch never blocks a real-time stream
     # request for the same episode (worst case is a rare harmless double scrape).
     lock = DistributedLock(f"prefetch:{next_media_id}")
@@ -116,6 +143,7 @@ async def prefetch_next_episode(
             ip=ip,
             played_hash=played_hash,
         )
+        _mark_warmed(warm_key, time.time(), rewarm_ttl)
     except Exception as e:
         logger.warning(f"Next-episode prefetch failed for {next_media_id}: {e}")
     finally:
