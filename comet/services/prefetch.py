@@ -228,6 +228,19 @@ async def _warm_next_episode(
         target_air_date=target_air_date,
     )
 
+    # Diagnostic receipt for prefetch-write / stream-read alignment. Logged in
+    # the same shape as stream.py's read-side receipt so the two lines diff
+    # visually when a slow re-open happens later. Fields here are exactly what
+    # got written to debrid_availability rows.
+    logger.log(
+        "SCRAPER",
+        f"🔍 Availability-cache write for {next_media_id}: "
+        f"torrents={len(torrent_manager.torrents)} "
+        f"services={[e['service'] for e in debrid_entries]} "
+        f"season_norm={season} episode_norm={next_episode} "
+        f"account_key_hashes={[build_account_key_hash(e['apiKey'])[:8] for e in debrid_entries]}"
+    )
+
     logger.log(
         "SCRAPER",
         f"🔮 Prefetched next episode {next_media_id}: "

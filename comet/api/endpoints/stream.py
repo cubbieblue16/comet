@@ -8,7 +8,7 @@ from comet.core.config_validation import config_check
 from comet.core.logger import logger
 from comet.core.models import settings
 from comet.debrid.exceptions import DebridAuthError
-from comet.debrid.manager import get_debrid_extension
+from comet.debrid.manager import build_account_key_hash, get_debrid_extension
 from comet.metadata.episode_index import EpisodeIndexService
 from comet.metadata.filter import release_filter
 from comet.metadata.manager import MetadataScraper
@@ -803,6 +803,26 @@ async def stream(
             search_episode,
             torrent_manager.torrents,
         )
+
+    # Diagnostic for prefetch-write / stream-read alignment: log the read-side
+    # receipt whenever the cache only partially covers the torrent set, so a
+    # slow re-open leaves matching read+write lines in the log to diff. Gated
+    # on partial-hit AND debrid_entries presence to stay quiet when the cache
+    # works as designed or when the request isn't using debrid at all.
+    if debrid_entries and torrent_manager.torrents:
+        _verified_count = sum(
+            1 for h in torrent_manager.torrents
+            if any(verified_service_cache_status.get(h, {}).values())
+        )
+        if _verified_count < len(torrent_manager.torrents):
+            logger.log(
+                "SCRAPER",
+                f"🔍 Availability-cache read for {media_id}: "
+                f"verified={_verified_count}/{len(torrent_manager.torrents)} "
+                f"services={[e['service'] for e in debrid_entries]} "
+                f"season_norm={search_season} episode_norm={search_episode} "
+                f"account_key_hashes={[build_account_key_hash(e['apiKey'])[:8] for e in debrid_entries]}"
+            )
 
     total_count = len(torrent_manager.torrents)
     total_verified_cached_count = 0
