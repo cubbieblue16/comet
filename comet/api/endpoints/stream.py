@@ -15,6 +15,7 @@ from comet.metadata.manager import MetadataScraper
 from comet.services.anime import anime_mapper
 from comet.services.cache_state import CacheStateManager
 from comet.services.debrid import DebridService
+from comet.services.debrid_cache import count_verdicted_info_hashes
 from comet.services.debrid_account_scraper import (
     ensure_account_snapshot_ready, get_account_torrents_for_media,
     ingest_account_torrents_to_public_cache, schedule_account_snapshot_refresh)
@@ -804,26 +805,6 @@ async def stream(
             torrent_manager.torrents,
         )
 
-    # Diagnostic for prefetch-write / stream-read alignment: log the read-side
-    # receipt whenever the cache only partially covers the torrent set, so a
-    # slow re-open leaves matching read+write lines in the log to diff. Gated
-    # on partial-hit AND debrid_entries presence to stay quiet when the cache
-    # works as designed or when the request isn't using debrid at all.
-    if debrid_entries and torrent_manager.torrents:
-        _verified_count = sum(
-            1 for h in torrent_manager.torrents
-            if any(verified_service_cache_status.get(h, {}).values())
-        )
-        if _verified_count < len(torrent_manager.torrents):
-            logger.log(
-                "SCRAPER",
-                f"🔍 Availability-cache read for {media_id}: "
-                f"verified={_verified_count}/{len(torrent_manager.torrents)} "
-                f"services={[e['service'] for e in debrid_entries]} "
-                f"season_norm={search_season} episode_norm={search_episode} "
-                f"account_key_hashes={[build_account_key_hash(e['apiKey'])[:8] for e in debrid_entries]}"
-            )
-
     total_count = len(torrent_manager.torrents)
     total_verified_cached_count = 0
     for info_hash in torrent_manager.torrents:
@@ -832,13 +813,63 @@ async def stream(
                 total_verified_cached_count += 1
                 break
 
+    # Verdicted count = hashes the cache has ANY answer for (positive OR
+    # negative within TTL). This is the question the ratio gate actually
+    # wants to ask: "do we already know enough to skip the live recheck?"
+    # Without negative caching, this would equal verified count — but with
+    # the is_cached column, "asked and not cached" rows also count, which
+    # is what lets a previously-prefetched (media, service) skip the
+    # redundant 6s live call.
+    total_verdicted_count = 0
+    if debrid_entries and total_count > 0:
+        unique_services = _dedupe_debrid_entries_by_service(debrid_entries)
+        info_hashes_for_verdict = list(torrent_manager.torrents.keys())
+        verdict_results = await asyncio.gather(
+            *[
+                count_verdicted_info_hashes(
+                    entry["service"],
+                    info_hashes_for_verdict,
+                    search_season,
+                    search_episode,
+                )
+                for entry in unique_services
+            ],
+            return_exceptions=True,
+        )
+        for result in verdict_results:
+            if isinstance(result, Exception):
+                logger.log(
+                    "DEBRID",
+                    f"❌ Error counting verdicted info hashes: {result}",
+                )
+                continue
+            if result > total_verdicted_count:
+                total_verdicted_count = result
+
+    # Diagnostic for prefetch-write / stream-read alignment: log the read-side
+    # receipt whenever the cache only partially covers the torrent set, so a
+    # slow re-open leaves matching read+write lines in the log to diff. Gated
+    # on partial-hit AND debrid_entries presence to stay quiet when the cache
+    # works as designed or when the request isn't using debrid at all.
+    if debrid_entries and torrent_manager.torrents:
+        if total_verified_cached_count < total_count:
+            logger.log(
+                "SCRAPER",
+                f"🔍 Availability-cache read for {media_id}: "
+                f"verified={total_verified_cached_count}/{total_count} "
+                f"verdicted={total_verdicted_count}/{total_count} "
+                f"services={[e['service'] for e in debrid_entries]} "
+                f"season_norm={search_season} episode_norm={search_episode} "
+                f"account_key_hashes={[build_account_key_hash(e['apiKey'])[:8] for e in debrid_entries]}"
+            )
+
     needs_debrid_check = (
         total_count > 0
         and debrid_entries
         and (
             (not cache_result.has_cached_torrents and not use_account_scrape)
-            or total_verified_cached_count == 0
-            or (total_verified_cached_count / total_count)
+            or total_verdicted_count == 0
+            or (total_verdicted_count / total_count)
             < settings.DEBRID_CACHE_CHECK_RATIO
         )
     )

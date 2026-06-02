@@ -100,8 +100,10 @@ class DebridService:
             target_air_date=target_air_date,
         )
 
-        if len(availability) == 0:
-            return set()
+        # NOTE: Do NOT early-return when availability is empty. We still want
+        # to write negative-verdict rows (is_cached=FALSE) for every queried
+        # hash so future reads can short-circuit the live recheck. See
+        # docs/superpowers/specs/2026-06-02-availability-cache-negative-verdicts-design.md.
 
         info_hash_set = set(info_hashes)
         cached_hashes = set()
@@ -136,7 +138,15 @@ class DebridService:
                 if file["size"] is not None:
                     torrent["size"] = file["size"]
 
-        asyncio.create_task(cache_availability(self.debrid_service, availability))
+        asyncio.create_task(
+            cache_availability(
+                self.debrid_service,
+                availability,
+                queried_info_hashes=info_hashes,
+                season=season,
+                episode=episode,
+            )
+        )
         return cached_hashes
 
     async def check_existing_availability(

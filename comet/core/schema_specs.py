@@ -332,6 +332,7 @@ DEBRID_AVAILABILITY_TABLE_SPEC = ManagedTableSpec(
             size BIGINT,
             parsed_json TEXT,
             updated_at REAL NOT NULL,
+            is_cached BOOLEAN NOT NULL DEFAULT TRUE,
             CHECK ((season IS NULL AND season_norm = -1) OR season = season_norm),
             CHECK ((episode IS NULL AND episode_norm = -1) OR episode = episode_norm)
         )
@@ -350,6 +351,11 @@ DEBRID_AVAILABILITY_TABLE_SPEC = ManagedTableSpec(
             column_name="updated_at",
             column_sql="updated_at REAL",
             legacy_name="timestamp",
+        ),
+        # Negative-verdict caching: every pre-existing row IS a positive
+        # verdict, so backfill to TRUE. Future writes set this explicitly.
+        LegacyColumnMigration(
+            "is_cached", "is_cached BOOLEAN NOT NULL DEFAULT TRUE"
         ),
     ),
     index_sql=(

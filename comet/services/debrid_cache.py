@@ -16,6 +16,7 @@ DEBRID_CHANGE_DETECTION_COLUMNS = (
     "file_index",
     "size",
     "parsed_json",
+    "is_cached",
 )
 DEBRID_UPDATE_COLUMNS = (*DEBRID_CHANGE_DETECTION_COLUMNS, "updated_at")
 DEBRID_UPDATE_SET_SQL = build_upsert_assignments(DEBRID_UPDATE_COLUMNS)
@@ -56,7 +57,8 @@ CACHE_AVAILABILITY_QUERY = f"""
         title,
         size,
         parsed_json,
-        updated_at
+        updated_at,
+        is_cached
     )
     VALUES (
         :debrid_service,
@@ -69,14 +71,37 @@ CACHE_AVAILABILITY_QUERY = f"""
         :title,
         :size,
         :parsed_json,
-        :updated_at
+        :updated_at,
+        :is_cached
     )
     ON CONFLICT (debrid_service, info_hash, season_norm, episode_norm)
     {CONDITIONAL_UPDATE_SQL}
 """
 
 
-async def cache_availability(debrid_service: str, availability: list):
+async def cache_availability(
+    debrid_service: str,
+    availability: list,
+    *,
+    queried_info_hashes: list[str] | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+):
+    """Persist availability verdicts to the cache.
+
+    Positive verdicts (cached files) are written one row per file, as
+    before. When `queried_info_hashes` is supplied, this function ALSO
+    writes a negative-verdict row (is_cached=FALSE) for every queried hash
+    that didn't return a positive match at the queried (season, episode)
+    scope. That distinguishes "we never asked" (no row) from "we asked and
+    it's not cached" (negative row) in subsequent reads, so the stream
+    endpoint's `DEBRID_CACHE_CHECK_RATIO` gate doesn't re-fire the live
+    check when negatives are the answer.
+
+    For callers that don't perform a bulk availability check (e.g. caching
+    files discovered during link generation for a single known-cached
+    torrent), omit `queried_info_hashes` — no negative rows are written.
+    """
     current_time = time.time()
 
     values = [
@@ -96,11 +121,43 @@ async def cache_availability(debrid_service: str, availability: list):
             ),
             "updated_at": current_time,
             "update_interval": DEBRID_UPDATE_INTERVAL,
+            "is_cached": True,
         }
         for file in availability
     ]
 
-    await database.execute_many(CACHE_AVAILABILITY_QUERY, values)
+    if queried_info_hashes:
+        # A queried hash is "positively answered at queried scope" if any
+        # returned file matches that scope (file.season/episode None or
+        # equal to the queried season/episode). Mirrors the matching done
+        # in DebridService.get_and_cache_availability.
+        positives_at_scope = {
+            file["info_hash"]
+            for file in availability
+            if (file["season"] is None or file["season"] == season)
+            and (file["episode"] is None or file["episode"] == episode)
+        }
+        negatives = [h for h in queried_info_hashes if h not in positives_at_scope]
+        for info_hash in negatives:
+            values.append(
+                {
+                    "debrid_service": debrid_service,
+                    "info_hash": info_hash,
+                    "file_index": None,
+                    "title": None,
+                    "season": season,
+                    "episode": episode,
+                    **build_scope_params(season, episode),
+                    "size": None,
+                    "parsed_json": None,
+                    "updated_at": current_time,
+                    "update_interval": DEBRID_UPDATE_INTERVAL,
+                    "is_cached": False,
+                }
+            )
+
+    if values:
+        await database.execute_many(CACHE_AVAILABILITY_QUERY, values)
 
 
 async def get_cached_availability(
@@ -124,7 +181,7 @@ async def get_cached_availability(
         **build_scope_lookup_params(season, episode),
     }
 
-    base_from_where += " AND debrid_service = :debrid_service"
+    base_from_where += " AND debrid_service = :debrid_service AND is_cached = TRUE"
     params["debrid_service"] = debrid_service
 
     if debrid_service == "offcloud":
@@ -181,6 +238,8 @@ async def get_cached_availability_any_service(
         **build_scope_lookup_params(season, episode),
     }
 
+    base_from_where += " AND is_cached = TRUE"
+
     query = f"""
         SELECT info_hash, file_index, title, size, parsed
         FROM (
@@ -200,3 +259,48 @@ async def get_cached_availability_any_service(
     """
 
     return await database.fetch_all(query, params)
+
+
+async def count_verdicted_info_hashes(
+    debrid_service: str,
+    info_hashes: list[str],
+    season: int | None = None,
+    episode: int | None = None,
+) -> int:
+    """Count hashes with ANY verdict (positive OR negative) within TTL at the
+    queried (season, episode) scope.
+
+    This answers "do we already know the answer for these hashes?" — the
+    question the stream endpoint's DEBRID_CACHE_CHECK_RATIO gate actually
+    wants to ask. Unlike `get_cached_availability`, this does NOT filter by
+    is_cached, so negative-verdict rows count.
+    """
+    if not info_hashes:
+        return 0
+
+    min_timestamp = time.time() - settings.DEBRID_CACHE_TTL
+
+    query = f"""
+        SELECT COUNT(DISTINCT info_hash) AS verdicted
+        FROM debrid_availability
+        WHERE {INFO_HASH_MEMBERSHIP_SQL}
+        AND updated_at >= :min_timestamp
+        AND debrid_service = :debrid_service
+        AND {SCOPE_FILTER_SQL}
+    """
+
+    params = {
+        "info_hashes": encode_json_param(info_hashes),
+        "min_timestamp": min_timestamp,
+        "debrid_service": debrid_service,
+        **build_scope_lookup_params(season, episode),
+    }
+
+    row = await database.fetch_one(query, params)
+    if row is None:
+        return 0
+    # databases returns Record; handle both mapping and positional access.
+    try:
+        return int(row["verdicted"] or 0)
+    except (KeyError, TypeError):
+        return int(row[0] or 0)
