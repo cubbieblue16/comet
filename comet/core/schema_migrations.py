@@ -913,6 +913,24 @@ async def _migration_series_episode_index_refresh(ctx: MigrationContext):
     return True
 
 
+async def _migration_debrid_availability_is_cached(ctx: MigrationContext):
+    # Adds the is_cached BOOLEAN column to debrid_availability so the cache
+    # can store negative verdicts (asked StremThru, answer was "not cached")
+    # alongside positives. Without this, the stream endpoint's
+    # DEBRID_CACHE_CHECK_RATIO gate can't tell "never asked" from "asked
+    # and not cached" and re-fires the live debrid call on every re-open.
+    # See docs/superpowers/specs/2026-06-02-availability-cache-negative-verdicts-design.md.
+    # Constant default → non-blocking ADD COLUMN on PostgreSQL. Every
+    # pre-existing row IS a positive verdict, so the default is correct.
+    await _add_column_if_missing(
+        ctx,
+        "debrid_availability",
+        "is_cached",
+        "is_cached BOOLEAN NOT NULL DEFAULT TRUE",
+    )
+    return True
+
+
 MIGRATIONS = [
     ("2026030901_foundation", _migration_foundation),
     ("2026030902_backfill_canonical_tables", _migration_backfill_canonical_tables),
@@ -924,5 +942,9 @@ MIGRATIONS = [
     (
         "2026031602_series_episode_index_refresh",
         _migration_series_episode_index_refresh,
+    ),
+    (
+        "2026060201_debrid_availability_is_cached",
+        _migration_debrid_availability_is_cached,
     ),
 ]
