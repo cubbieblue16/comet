@@ -295,7 +295,22 @@ async def _resolve_next_episode_link(
         played_hash,
     )
     if target_hash is None:
-        return  # nothing cached for the next episode on this service
+        # No torrent (played_hash or any ranked candidate) is cached on this
+        # service for N+1. Logged so we can distinguish this silent path from
+        # the "existing link reused" path below when debugging slow auto-advance.
+        cached_count = sum(
+            1 for h in torrent_manager.torrents
+            if (service_cache_status.get(h) or {}).get(debrid_service)
+        )
+        logger.log(
+            "PLAYBACK",
+            f"⏭️  Prefetch link-gen skipped for {next_media_id}: "
+            f"no cached candidate on {debrid_service} "
+            f"(played_hash={played_hash[:8] if played_hash else 'none'}, "
+            f"ranked={len(torrent_manager.ranked_torrents)}, "
+            f"cached_on_service={cached_count})",
+        )
+        return
 
     torrent = torrent_manager.torrents[target_hash]
     account_key_hash = build_account_key_hash(debrid_api_key)
@@ -323,6 +338,11 @@ async def _resolve_next_episode_link(
         },
     )
     if existing:
+        logger.log(
+            "PLAYBACK",
+            f"♻️  Prefetch link reused for {next_media_id} ({target_hash[:8]}): "
+            f"fresh cached link already in download_links_cache",
+        )
         return
 
     debrid = get_debrid(
@@ -334,6 +354,11 @@ async def _resolve_next_episode_link(
         ip,
     )
     if debrid is None:
+        logger.log(
+            "PLAYBACK",
+            f"⏭️  Prefetch link-gen skipped for {next_media_id}: "
+            f"get_debrid returned None for {debrid_service}",
+        )
         return
 
     file_index = torrent.get("fileIndex")
@@ -354,6 +379,11 @@ async def _resolve_next_episode_link(
         return
 
     if not download_url:
+        logger.log(
+            "PLAYBACK",
+            f"⏭️  Prefetch link-gen skipped for {next_media_id} ({target_hash[:8]}): "
+            f"generate_download_link returned empty URL",
+        )
         return
 
     from comet.api.endpoints.playback import cache_download_link
