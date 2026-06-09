@@ -87,6 +87,13 @@ class AppSettings(BaseSettings):
     TORRENT_CACHE_TTL: Optional[int] = 2592000  # 30 days
     LIVE_TORRENT_CACHE_TTL: Optional[int] = 604800  # 7 days
     DEBRID_CACHE_TTL: Optional[int] = 86400  # 1 day
+    # Negative availability verdicts (is_cached=FALSE) stop counting toward
+    # the DEBRID_CACHE_CHECK_RATIO gate after this many seconds. Kept much
+    # shorter than DEBRID_CACHE_TTL because a negative is weak evidence:
+    # RealDebrid has no instant-availability API ("don't know" != "not
+    # cached"), and playing an episode actively makes torrents cached.
+    # <= 0 falls back to DEBRID_CACHE_TTL (pre-TTL-split behavior).
+    DEBRID_NEGATIVE_CACHE_TTL: Optional[int] = 3600  # 1 hour
     METRICS_CACHE_TTL: Optional[int] = 60  # 1 minute
     DEBRID_CACHE_CHECK_RATIO: Optional[float] = 0.0  # 0.0 to 1.0
     SCRAPE_LOCK_TTL: Optional[int] = 300  # 5 minutes

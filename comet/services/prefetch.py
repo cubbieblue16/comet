@@ -21,6 +21,9 @@ affect the playback that triggered it. Gated behind ``PREFETCH_NEXT_EPISODE``
 import asyncio
 import time
 
+import orjson
+from RTN import ParsedData
+
 from comet.core.database import (DOWNLOAD_LINK_CACHE_TTL,
                                   build_scope_lookup_params, database)
 from comet.core.logger import logger
@@ -29,9 +32,11 @@ from comet.debrid.exceptions import DebridLinkGenerationError
 from comet.debrid.manager import build_account_key_hash, get_debrid
 from comet.metadata.episode_index import EpisodeIndexService
 from comet.metadata.manager import MetadataScraper
+from comet.services.cache_state import CacheStateManager
 from comet.services.date_episode_resolver import DateEpisodeResolver
 from comet.services.lock import DistributedLock
 from comet.services.orchestration import TorrentManager
+from comet.utils.parsing import ensure_multi_language
 
 
 # Best-effort in-memory guard against re-warming the same next episode on every
@@ -83,6 +88,58 @@ def _select_target_hash(
         if _cached(info_hash):
             return info_hash
     return None
+
+
+async def _ensure_played_hash_candidate(
+    torrent_manager,
+    played_hash: str | None,
+    media_only_id: str,
+):
+    """Make sure the just-played torrent is a candidate for episode N+1.
+
+    Stremio's binge auto-advance reuses the played hash (season packs), but the
+    N+1 candidate set can miss it — e.g. only per-episode rows in the cache, or
+    a scrape that didn't resurface the pack. Pull its torrent row in by
+    info_hash so the availability check can verify it at scope; if the pack
+    doesn't actually contain N+1, the at-scope verdict stays negative and
+    selection ignores it.
+    """
+    if not played_hash or played_hash in torrent_manager.torrents:
+        return
+
+    row = await database.fetch_one(
+        """
+        SELECT title, seeders, size, tracker, sources_json, parsed_json
+        FROM torrents
+        WHERE info_hash = :info_hash
+        AND media_id = :media_id
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        {"info_hash": played_hash, "media_id": media_only_id},
+    )
+    if row is None or not row["parsed_json"]:
+        return
+
+    parsed = ParsedData(**orjson.loads(row["parsed_json"]))
+    ensure_multi_language(parsed)
+    torrent_manager.torrents[played_hash] = {
+        # fileIndex deliberately None: any cached index belongs to the episode
+        # just played, not N+1. The availability check fills the at-scope
+        # index; link-gen resolves by season/episode if it stays unknown.
+        "fileIndex": None,
+        "title": row["title"],
+        "seeders": row["seeders"],
+        "size": row["size"],
+        "tracker": row["tracker"],
+        "sources": orjson.loads(row["sources_json"]) if row["sources_json"] else [],
+        "parsed": parsed,
+    }
+    logger.log(
+        "SCRAPER",
+        f"🔮 Prefetch: injected played hash {played_hash[:8]} from torrents "
+        f"table as N+1 candidate for {media_only_id}",
+    )
 
 
 async def prefetch_next_episode(
@@ -204,8 +261,26 @@ async def _warm_next_episode(
     )
 
     await torrent_manager.get_cached_torrents()
-    if not torrent_manager.primary_cached:
+    needs_scrape = not torrent_manager.primary_cached
+    if not needs_scrape:
+        # A cache hit alone isn't enough: the rows can be stale and miss the
+        # freshly released N+1 torrents entirely. Mirror the stream flow's
+        # freshness test (CacheStateManager STALE -> background scrape) — a
+        # prefetch already runs in the background, so scrape inline here.
+        fresh_count = await CacheStateManager(
+            media_id=next_media_id,
+            media_only_id=media_only_id,
+            season=season,
+            episode=next_episode,
+            search_episode=next_episode,
+            search_season=season,
+            cache_media_ids=[media_only_id],
+        ).get_fresh_torrent_count()
+        needs_scrape = fresh_count == 0
+    if needs_scrape:
         await torrent_manager.scrape_torrents()
+
+    await _ensure_played_hash_candidate(torrent_manager, played_hash, media_only_id)
 
     if not torrent_manager.torrents:
         logger.log("SCRAPER", f"⏭️  Prefetch: no torrents for {next_media_id}")

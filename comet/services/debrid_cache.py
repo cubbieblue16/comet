@@ -11,6 +11,25 @@ DEBRID_UPDATE_INTERVAL = (
     settings.DEBRID_CACHE_TTL // 2 if settings.DEBRID_CACHE_TTL > 0 else 31536000
 )
 
+
+def _negative_cache_ttl() -> int:
+    """Effective TTL for negative verdicts; <= 0 falls back to the full TTL."""
+    ttl = settings.DEBRID_NEGATIVE_CACHE_TTL
+    if ttl is None or ttl <= 0:
+        ttl = settings.DEBRID_CACHE_TTL
+    return ttl if ttl and ttl > 0 else 31536000
+
+
+# A positive row is only considered expired (and overwritable by a negative)
+# past the full positive TTL.
+DEBRID_POSITIVE_EXPIRY = (
+    settings.DEBRID_CACHE_TTL if settings.DEBRID_CACHE_TTL > 0 else 31536000
+)
+# Negative rows refresh their timestamp on the shorter negative cadence so a
+# re-verified negative keeps counting as a verdict instead of expiring and
+# re-firing the live check on every stream request.
+DEBRID_NEGATIVE_UPDATE_INTERVAL = _negative_cache_ttl() // 2
+
 DEBRID_CHANGE_DETECTION_COLUMNS = (
     "title",
     "file_index",
@@ -35,12 +54,28 @@ AND episode_norm = :episode_norm
 
 
 def _build_conditional_update() -> str:
+    # First conjunct: a negative verdict may never touch a live positive —
+    # only refresh negatives or replace positives that outlived their TTL.
+    # Second conjunct: only write when something changed or the row is due
+    # for a refresh (negatives refresh on the shorter negative cadence).
     return f"""
         DO UPDATE SET
 {DEBRID_UPDATE_SET_SQL}
         WHERE
-            {DEBRID_DISTINCT_UPDATE_WHERE_SQL}
-            OR COALESCE(debrid_availability.updated_at, 0) < (EXCLUDED.updated_at - :update_interval)
+            (
+                EXCLUDED.is_cached = TRUE
+                OR debrid_availability.is_cached = FALSE
+                OR COALESCE(debrid_availability.updated_at, 0) < (EXCLUDED.updated_at - :positive_expiry)
+            )
+            AND (
+                {DEBRID_DISTINCT_UPDATE_WHERE_SQL}
+                OR COALESCE(debrid_availability.updated_at, 0) < (EXCLUDED.updated_at - :update_interval)
+                OR (
+                    EXCLUDED.is_cached = FALSE
+                    AND debrid_availability.is_cached = FALSE
+                    AND COALESCE(debrid_availability.updated_at, 0) < (EXCLUDED.updated_at - :neg_update_interval)
+                )
+            )
 """
 
 
@@ -121,6 +156,8 @@ async def cache_availability(
             ),
             "updated_at": current_time,
             "update_interval": DEBRID_UPDATE_INTERVAL,
+            "neg_update_interval": DEBRID_NEGATIVE_UPDATE_INTERVAL,
+            "positive_expiry": DEBRID_POSITIVE_EXPIRY,
             "is_cached": True,
         }
         for file in availability
@@ -152,6 +189,8 @@ async def cache_availability(
                     "parsed_json": None,
                     "updated_at": current_time,
                     "update_interval": DEBRID_UPDATE_INTERVAL,
+                    "neg_update_interval": DEBRID_NEGATIVE_UPDATE_INTERVAL,
+                    "positive_expiry": DEBRID_POSITIVE_EXPIRY,
                     "is_cached": False,
                 }
             )
@@ -273,18 +312,27 @@ async def count_verdicted_info_hashes(
     This answers "do we already know the answer for these hashes?" — the
     question the stream endpoint's DEBRID_CACHE_CHECK_RATIO gate actually
     wants to ask. Unlike `get_cached_availability`, this does NOT filter by
-    is_cached, so negative-verdict rows count.
+    is_cached, so negative-verdict rows count — but only within the shorter
+    DEBRID_NEGATIVE_CACHE_TTL: a negative is weak evidence (especially on
+    RealDebrid, where "don't know" != "not cached" and playing an episode
+    actively makes torrents cached), so it must not suppress the live
+    re-check for the full multi-day positive TTL.
     """
     if not info_hashes:
         return 0
 
-    min_timestamp = time.time() - settings.DEBRID_CACHE_TTL
+    now = time.time()
+    min_timestamp = now - settings.DEBRID_CACHE_TTL
+    neg_min_timestamp = now - _negative_cache_ttl()
 
     query = f"""
         SELECT COUNT(DISTINCT info_hash) AS verdicted
         FROM debrid_availability
         WHERE {INFO_HASH_MEMBERSHIP_SQL}
-        AND updated_at >= :min_timestamp
+        AND (
+            (is_cached = TRUE AND updated_at >= :min_timestamp)
+            OR (is_cached = FALSE AND updated_at >= :neg_min_timestamp)
+        )
         AND debrid_service = :debrid_service
         AND {SCOPE_FILTER_SQL}
     """
@@ -292,6 +340,7 @@ async def count_verdicted_info_hashes(
     params = {
         "info_hashes": encode_json_param(info_hashes),
         "min_timestamp": min_timestamp,
+        "neg_min_timestamp": neg_min_timestamp,
         "debrid_service": debrid_service,
         **build_scope_lookup_params(season, episode),
     }

@@ -10,6 +10,7 @@ from comet.core.config_validation import config_check
 from comet.core.database import (DOWNLOAD_LINK_CACHE_TTL,
                                  build_scope_lookup_params, build_scope_params,
                                  database)
+from comet.core.logger import logger
 from comet.core.models import settings
 from comet.debrid.exceptions import DebridLinkGenerationError
 from comet.debrid.manager import (build_account_key_hash, get_debrid,
@@ -159,6 +160,30 @@ async def playback(
         settings.PROXY_DEBRID_STREAM
         and settings.PROXY_DEBRID_STREAM_PASSWORD == config["debridStreamProxyPassword"]
     )
+
+    # Warm the next episode in the background so binge auto-advance is instant.
+    # Fired BEFORE link generation: this /playback/ request itself is the
+    # "user is watching episode N" signal, so N+1 must be warmed even when this
+    # episode's link-gen fails below — that's exactly when the prefetch chain
+    # would otherwise die. Fire-and-forget: never blocks or affects this
+    # playback response.
+    if settings.PREFETCH_NEXT_EPISODE and season is not None:
+        prefetch_task = asyncio.create_task(
+            prefetch_next_episode(
+                session=session,
+                config=config,
+                media_only_id=media_id,
+                season=season,
+                episode=episode,
+                debrid_service=debrid_service,
+                debrid_api_key=debrid_api_key,
+                ip=ip if not should_proxy else "",
+                played_hash=hash,
+            )
+        )
+        _PREFETCH_TASKS.add(prefetch_task)
+        prefetch_task.add_done_callback(_PREFETCH_TASKS.discard)
+
     if download_url is None:
         # Retrieve torrent sources from database for private trackers.
         if media_id:
@@ -250,12 +275,23 @@ async def playback(
             )
         except DebridLinkGenerationError as error:
             status_keys = error.status_keys
+            logger.log(
+                "PLAYBACK",
+                f"❌ Playback link-gen failed for {hash} on {debrid_service} "
+                f"(media={media_id}, S{season}E{episode}): {error} "
+                f"(status_keys={status_keys})",
+            )
             return build_status_video_response(
                 status_keys,
                 default_key=status_keys[0] if status_keys else "UNKNOWN",
             )
 
         if not download_url:
+            logger.log(
+                "PLAYBACK",
+                f"❌ Playback link-gen returned empty URL for {hash} on "
+                f"{debrid_service} (media={media_id}, S{season}E{episode})",
+            )
             return build_status_video_response(
                 [],
                 default_key="UNKNOWN",
@@ -269,25 +305,6 @@ async def playback(
             episode=episode,
             download_url=download_url,
         )
-
-    # Warm the next episode in the background so binge auto-advance is instant.
-    # Fire-and-forget: never blocks or affects this playback response.
-    if settings.PREFETCH_NEXT_EPISODE and season is not None:
-        prefetch_task = asyncio.create_task(
-            prefetch_next_episode(
-                session=session,
-                config=config,
-                media_only_id=media_id,
-                season=season,
-                episode=episode,
-                debrid_service=debrid_service,
-                debrid_api_key=debrid_api_key,
-                ip=ip if not should_proxy else "",
-                played_hash=hash,
-            )
-        )
-        _PREFETCH_TASKS.add(prefetch_task)
-        prefetch_task.add_done_callback(_PREFETCH_TASKS.discard)
 
     if should_proxy:
         return await custom_handle_stream_request(
