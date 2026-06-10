@@ -87,6 +87,17 @@ def parse_media_id(media_type: str, media_id: str):
         _, _, rest = media_id.partition(":")
         kitsu_id, _, episode_str = rest.partition(":")
         return kitsu_id, 1, parse_optional_int(episode_str) if episode_str else None
+    if media_id.startswith("tmdb:"):
+        _, _, rest = media_id.partition(":")
+        tmdb_id, sep1, rest1 = rest.partition(":")
+        if not sep1:
+            return tmdb_id, None, None
+        season_str, sep2, episode_str = rest1.partition(":")
+        return (
+            tmdb_id,
+            parse_optional_int(season_str),
+            parse_optional_int(episode_str) if sep2 else None,
+        )
     if media_type == "series":
         series_id, sep1, rest1 = media_id.partition(":")
         if not sep1:
