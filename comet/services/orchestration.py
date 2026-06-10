@@ -105,6 +105,11 @@ class TorrentManager:
             air_date = await self.date_resolver.get_air_date(
                 self.media_only_id, self.search_season, self.search_episode
             )
+            # Filtering decisions (_matches_requested_scope and the
+            # reject_unknown overrides below) read self.target_air_date —
+            # store the fallback result or date-named torrents get rejected.
+            if air_date is not None:
+                self.target_air_date = air_date
 
         request = ScrapeRequest(
             media_type=self.media_type,

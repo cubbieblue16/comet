@@ -224,6 +224,35 @@ def _dedupe_debrid_entries_by_service(debrid_entries: list) -> list:
     return list(unique_services.values())
 
 
+def select_entries_needing_debrid_check(
+    debrid_entries: list,
+    service_verdicted_counts: dict,
+    *,
+    total_count: int,
+    has_cached_torrents: bool,
+    use_account_scrape: bool,
+    check_ratio: float,
+) -> list:
+    """Per-service DEBRID_CACHE_CHECK_RATIO gate.
+
+    Each service is gated on its own verdict coverage — a fully-verdicted
+    service must not suppress the live check for a service with no verdicts.
+    A service missing from the counts map (count query errored) fails open
+    and gets checked.
+    """
+    if total_count <= 0 or not debrid_entries:
+        return []
+    if not has_cached_torrents and not use_account_scrape:
+        return list(debrid_entries)
+
+    selected = []
+    for entry in debrid_entries:
+        verdicted = service_verdicted_counts.get(entry["service"], 0)
+        if verdicted == 0 or (verdicted / total_count) < check_ratio:
+            selected.append(entry)
+    return selected
+
+
 async def background_scrape(
     torrent_manager: TorrentManager,
     media_id: str,
@@ -820,7 +849,7 @@ async def stream(
     # the is_cached column, "asked and not cached" rows also count, which
     # is what lets a previously-prefetched (media, service) skip the
     # redundant 6s live call.
-    total_verdicted_count = 0
+    service_verdicted_counts = {}
     if debrid_entries and total_count > 0:
         unique_services = _dedupe_debrid_entries_by_service(debrid_entries)
         info_hashes_for_verdict = list(torrent_manager.torrents.keys())
@@ -836,15 +865,14 @@ async def stream(
             ],
             return_exceptions=True,
         )
-        for result in verdict_results:
+        for entry, result in zip(unique_services, verdict_results):
             if isinstance(result, Exception):
                 logger.log(
                     "DEBRID",
-                    f"❌ Error counting verdicted info hashes: {result}",
+                    f"❌ Error counting verdicted info hashes for {entry['service']}: {result}",
                 )
                 continue
-            if result > total_verdicted_count:
-                total_verdicted_count = result
+            service_verdicted_counts[entry["service"]] = result
 
     # Diagnostic for prefetch-write / stream-read alignment: log the read-side
     # receipt whenever the cache only partially covers the torrent set, so a
@@ -857,26 +885,24 @@ async def stream(
                 "SCRAPER",
                 f"🔍 Availability-cache read for {media_id}: "
                 f"verified={total_verified_cached_count}/{total_count} "
-                f"verdicted={total_verdicted_count}/{total_count} "
+                f"verdicted_per_service={service_verdicted_counts} total={total_count} "
                 f"services={[e['service'] for e in debrid_entries]} "
                 f"season_norm={search_season} episode_norm={search_episode} "
                 f"account_key_hashes={[build_account_key_hash(e['apiKey'])[:8] for e in debrid_entries]}"
             )
 
-    needs_debrid_check = (
-        total_count > 0
-        and debrid_entries
-        and (
-            (not cache_result.has_cached_torrents and not use_account_scrape)
-            or total_verdicted_count == 0
-            or (total_verdicted_count / total_count)
-            < settings.DEBRID_CACHE_CHECK_RATIO
-        )
+    entries_needing_check = select_entries_needing_debrid_check(
+        debrid_entries,
+        service_verdicted_counts,
+        total_count=total_count,
+        has_cached_torrents=cache_result.has_cached_torrents,
+        use_account_scrape=use_account_scrape,
+        check_ratio=settings.DEBRID_CACHE_CHECK_RATIO,
     )
 
     debrid_errors = {}
-    if needs_debrid_check:
-        services_str = "+".join([e["service"] for e in debrid_entries])
+    if entries_needing_check:
+        services_str = "+".join([e["service"] for e in entries_needing_check])
         logger.log(
             "SCRAPER",
             f"🔄 Checking availability on debrid services: {services_str}",
@@ -886,7 +912,7 @@ async def stream(
             debrid_errors,
         ) = await get_and_cache_multi_service_availability(
             session,
-            debrid_entries,
+            entries_needing_check,
             torrent_manager.torrents,
             media_id,
             media_only_id,

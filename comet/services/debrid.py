@@ -86,7 +86,7 @@ class DebridService:
         episode: int,
         target_air_date: str | None = None,
     ) -> set[str]:
-        availability = await retrieve_debrid_availability(
+        availability, unanswered_hashes = await retrieve_debrid_availability(
             session,
             media_id,
             media_only_id,
@@ -104,6 +104,12 @@ class DebridService:
         # to write negative-verdict rows (is_cached=FALSE) for every queried
         # hash so future reads can short-circuit the live recheck. See
         # docs/superpowers/specs/2026-06-02-availability-cache-negative-verdicts-design.md.
+        # Hashes from failed check chunks were never answered — they must not
+        # become negative verdicts, or a transient upstream error poisons the
+        # cache for the whole negative TTL.
+        answered_info_hashes = [
+            h for h in info_hashes if h not in unanswered_hashes
+        ]
 
         info_hash_set = set(info_hashes)
         cached_hashes = set()
@@ -142,7 +148,7 @@ class DebridService:
             cache_availability(
                 self.debrid_service,
                 availability,
-                queried_info_hashes=info_hashes,
+                queried_info_hashes=answered_info_hashes,
                 season=season,
                 episode=episode,
             )

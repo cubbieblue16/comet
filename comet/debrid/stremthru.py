@@ -29,6 +29,24 @@ def batch_parse(filenames):
     return parsed_results
 
 
+def split_answered_chunks(chunks: list[list[str]], responses: list):
+    """Split per-chunk check responses into answered items and unanswered hashes.
+
+    A chunk whose request failed (None response or no "data" payload) was
+    never answered — its hashes must not be treated as "asked and not
+    cached", or they'd be persisted as negative verdicts and suppress the
+    corrective live re-check for the whole negative TTL.
+    """
+    availability = []
+    unanswered_hashes: set[str] = set()
+    for chunk, response in zip(chunks, responses):
+        if response and "data" in response:
+            availability.append(response["data"]["items"])
+        else:
+            unanswered_hashes.update(chunk)
+    return availability, unanswered_hashes
+
+
 class StremThru:
     _MAGNET_READY_STATUSES: frozenset[str] = frozenset({"cached", "downloaded"})
     _MAGNET_PENDING_STATUSES: frozenset[str] = frozenset(
@@ -251,11 +269,12 @@ class StremThru:
 
         responses = await asyncio.gather(*tasks)
 
-        availability = [
-            response["data"]["items"]
-            for response in responses
-            if response and "data" in response
-        ]
+        availability, unanswered_hashes = split_answered_chunks(chunks, responses)
+        if unanswered_hashes:
+            logger.warning(
+                f"{self.store_name}: {len(unanswered_hashes)} hashes in failed "
+                f"availability chunks — excluded from negative-verdict caching"
+            )
 
         is_offcloud = self.store_name == "offcloud"
         requested_series_id, requested_season, requested_episode = (
@@ -381,7 +400,7 @@ class StremThru:
             "SCRAPER",
             f"{self.store_name}: Found {cached_count} cached torrents with {len(files)} valid files",
         )
-        return files
+        return files, unanswered_hashes
 
     async def generate_download_link(
         self,
