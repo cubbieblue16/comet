@@ -4,6 +4,21 @@ from comet.core.logger import logger
 from comet.core.models import settings
 
 
+def _is_language_failure(failed_key):
+    """True if an RTN check_fetch failed_key represents a LANGUAGE violation.
+
+    These are the user's hard language filter being broken:
+      "missing_required_language" -> none of the Required languages present
+      "lang_<code>"               -> an Excluded language is present
+      "unknown_language"          -> remove_unknown_languages on, none detected
+    """
+    return (
+        failed_key == "missing_required_language"
+        or failed_key == "unknown_language"
+        or failed_key.startswith("lang_")
+    )
+
+
 def rank_worker(
     torrents,
     rtn_settings,
@@ -28,9 +43,14 @@ def rank_worker(
 
         if remove_trash:
             if permissive:
-                # Only reject truly unwatchable content (CAM/SCREENER/TELESYNC)
-                # check_fetch result kept for Torrent object but not used as gate
-                if rank <= -10000:
+                # Permissive relaxes RANK thresholds and ignores RTN's
+                # trash/quality verdict, but still honors the user's hard
+                # LANGUAGE filter (Required / Excluded / remove-unknown).
+                # Reject truly unwatchable content (CAM/SCREENER/TELESYNC) on
+                # rank, plus anything that fails the language gate.
+                if rank <= -10000 or any(
+                    _is_language_failure(key) for key in failed_keys
+                ):
                     continue
             else:
                 if not is_fetchable or rank < rtn_settings.options["remove_ranks_under"]:
