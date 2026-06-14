@@ -1072,6 +1072,12 @@
             document.getElementById("resultFormatPreview").textContent =
               lines.length ? lines.join("\n") : "Empty result format configuration";
           }
+          // updateResultFormatPreview is declared inside this IIFE but is also called from
+          // populateFormFromSettings (defined in the outer script scope). Without this it throws
+          // ReferenceError mid-hydration, aborting before the language/resolution selects are
+          // restored — so saved language settings appeared not to "stick" on revisit. Expose it
+          // globally so the outer-scope call resolves.
+          window.updateResultFormatPreview = updateResultFormatPreview;
           resultFormatSelect.addEventListener("sl-change", updateResultFormatPreview);
           updateResultFormatPreview();
 
