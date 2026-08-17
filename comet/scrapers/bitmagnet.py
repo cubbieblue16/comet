@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 from comet.core.logger import logger
 from comet.core.models import settings
 from comet.scrapers.base import BaseScraper
+from comet.scrapers.helpers.date_queries import build_date_queries
 from comet.scrapers.models import ScrapeRequest
 
 
@@ -82,6 +83,28 @@ class BitmagnetScraper(BaseScraper):
             logger.warning(f"Error scraping BitMagnet page offset={offset}: {e}")
             return []
 
+    async def scrape_date_query(self, query: str, limit: int):
+        try:
+            params = {
+                "t": "search",
+                "q": query,
+                "offset": 0,
+                "limit": limit,
+            }
+            async with self.session.get(
+                f"{self.url}/torznab/api", params=params
+            ) as response:
+                data_text = await response.text()
+                if not data_text.strip():
+                    return []
+                root = ET.fromstring(data_text)
+                return self.parse_items(root)
+        except ET.ParseError:
+            return []
+        except Exception as e:
+            logger.warning(f"Error scraping BitMagnet date query '{query}': {e}")
+            return []
+
     async def scrape(self, request: ScrapeRequest):
         torrents = []
         limit = 100
@@ -129,5 +152,33 @@ class BitmagnetScraper(BaseScraper):
                 break
 
             offset += batch_size * limit
+
+        # Date-based fallback for weekly shows that release as date-named
+        # torrents (e.g. WWE SmackDown) instead of S##E##, which the
+        # imdb-scoped tvsearch above can't find (bitmagnet's classifier
+        # can't attach season/episode to those releases).
+        if request.air_date and request.media_type == "series":
+            date_queries = build_date_queries(
+                request.title, request.air_date, season, episode
+            )
+            if date_queries:
+                existing_hashes = {t["infoHash"] for t in torrents}
+                date_results = await asyncio.gather(
+                    *[self.scrape_date_query(q, limit) for q in date_queries]
+                )
+
+                added = 0
+                for batch_results in date_results:
+                    for torrent in batch_results:
+                        info_hash = torrent["infoHash"]
+                        if info_hash not in existing_hashes:
+                            existing_hashes.add(info_hash)
+                            torrents.append(torrent)
+                            added += 1
+
+                if added:
+                    logger.debug(
+                        f"BitMagnet date fallback added {added} extra torrent(s) for {request.title}"
+                    )
 
         return torrents

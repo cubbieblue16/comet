@@ -1,5 +1,6 @@
 from comet.core.logger import logger
 from comet.scrapers.base import BaseScraper
+from comet.scrapers.helpers.date_queries import build_date_queries
 from comet.scrapers.models import ScrapeRequest
 
 
@@ -42,9 +43,14 @@ class ZileanScraper(BaseScraper):
                     seen_hashes.add(t["infoHash"])
                     torrents.append(t)
 
-            # Date-based search for shows that use dates instead of S##E##
-            if request.air_date:
-                date_query = f"{request.title} {request.air_date.replace('-', '.')}"
+            # Date-based fallback search for shows that use dates instead of
+            # S##E## (fans out across air_date-1/air_date/air_date+1 to
+            # tolerate TMDB timezone drift, and a cleaned title to avoid
+            # punctuation that breaks full-text search)
+            date_queries = build_date_queries(
+                request.title, request.air_date, request.season, request.episode
+            )
+            for date_query in date_queries:
                 data = await self.session.get(
                     f"{self.url}/dmm/filtered?query={date_query}"
                 )

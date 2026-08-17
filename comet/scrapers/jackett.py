@@ -5,6 +5,7 @@ from comet.core.constants import INDEXER_TIMEOUT
 from comet.core.logger import logger
 from comet.core.models import settings
 from comet.scrapers.base import BaseScraper
+from comet.scrapers.helpers.date_queries import build_date_queries
 from comet.scrapers.models import ScrapeRequest, ScrapeResult
 from comet.services.indexer_manager import indexer_manager
 from comet.services.torrent_manager import (add_torrent_queue,
@@ -123,9 +124,18 @@ class JackettScraper(BaseScraper):
                 f"{request.title} S{request.season:02d}E{request.episode:02d}"
             )
 
-        # Date-based query for shows that use dates instead of S##E##
+        # Date-based fallback queries for shows that use dates instead of
+        # S##E## (fans out across air_date-1/air_date/air_date+1 to
+        # tolerate TMDB timezone drift, and a cleaned title to avoid
+        # punctuation that breaks full-text search)
         if request.air_date:
-            queries.append(f"{request.title} {request.air_date.replace('-', '.')}")
+            queries.extend(
+                build_date_queries(
+                    request.title, request.air_date, request.season, request.episode
+                )
+            )
+
+        queries = list(dict.fromkeys(queries))
 
         try:
             tasks = []
