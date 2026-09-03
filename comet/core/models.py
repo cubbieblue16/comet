@@ -86,6 +86,15 @@ class AppSettings(BaseSettings):
     METADATA_CACHE_TTL: Optional[int] = 2592000  # 30 days
     TORRENT_CACHE_TTL: Optional[int] = 2592000  # 30 days
     LIVE_TORRENT_CACHE_TTL: Optional[int] = 604800  # 7 days
+    # Episodes that aired within RECENT_EPISODE_WINDOW_DAYS (or have not aired yet)
+    # use this much shorter re-scrape gate instead of LIVE_TORRENT_CACHE_TTL, so a
+    # pre-air/air-minute thin scrape cannot freeze the cache over release night.
+    # None disables the age-aware gate.
+    RECENT_EPISODE_TORRENT_CACHE_TTL: Optional[int] = 3600  # 1 hour
+    RECENT_EPISODE_WINDOW_DAYS: Optional[int] = 3
+    # When a recent episode's cache is stale AND holds fewer than this many
+    # torrents, scrape in the foreground (block ~seconds) instead of background.
+    RECENT_EPISODE_THIN_CACHE_THRESHOLD: Optional[int] = 10
     DEBRID_CACHE_TTL: Optional[int] = 86400  # 1 day
     # Negative availability verdicts (is_cached=FALSE) stop counting toward
     # the DEBRID_CACHE_CHECK_RATIO gate after this many seconds. Kept much

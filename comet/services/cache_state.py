@@ -1,6 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -24,6 +25,7 @@ class CacheState(Enum):
     STALE = "stale"  # Cached torrents exist but are old, background refresh needed
     EMPTY = "empty"  # No cached torrents, need to scrape
     FIRST_SEARCH = "first_search"  # Has cache but first time this media was searched
+    THIN_RECENT = "thin_recent"  # Recent episode, stale, and cache is too thin - scrape in foreground
 
 
 class ScrapeDecision(Enum):
@@ -33,6 +35,43 @@ class ScrapeDecision(Enum):
     SCRAPE_FOREGROUND = "scrape_foreground"  # Scrape now, block until done
     SCRAPE_BACKGROUND = "scrape_background"  # Return cache now, scrape in background
     WAIT_FOR_OTHER = "wait_for_other"  # Another instance is scraping, tell user to wait
+
+
+def is_recent_episode(
+    target_air_date: str | None,
+    now: date | None = None,
+    window_days: int | None = None,
+) -> bool:
+    """
+    Whether an episode counts as "recent": it aired within `window_days` days
+    ago, or has not aired yet at all (negative age).
+
+    Used to gate the shorter RECENT_EPISODE_TORRENT_CACHE_TTL so a thin
+    pre-air/air-minute scrape can't freeze the live cache for the full
+    LIVE_TORRENT_CACHE_TTL over release night.
+
+    Bad/unparseable air date strings are tolerated and treated as not recent.
+    """
+    if settings.RECENT_EPISODE_TORRENT_CACHE_TTL is None:
+        return False
+
+    if window_days is None:
+        window_days = settings.RECENT_EPISODE_WINDOW_DAYS
+    if window_days is None:
+        return False
+
+    if not target_air_date:
+        return False
+
+    try:
+        aired = date.fromisoformat(target_air_date)
+    except (ValueError, TypeError):
+        return False
+
+    if now is None:
+        now = datetime.now(timezone.utc).date()
+
+    return (now - aired).days <= window_days
 
 
 @dataclass
@@ -88,12 +127,14 @@ class CacheStateManager:
         search_episode: Optional[int] = None,
         search_season: Optional[int] = None,
         cache_media_ids: list[str] | None = None,
+        target_air_date: Optional[str] = None,
     ):
         self.media_id = media_id
         self.media_only_id = media_only_id
         self.season = season
         self.episode = episode
         self.is_kitsu = is_kitsu
+        self.target_air_date = target_air_date
         search = normalize_search_params(season, episode, search_season, search_episode)
         self.search_season = search.season
         self.search_episode = search.episode
@@ -105,16 +146,41 @@ class CacheStateManager:
             self.media_only_id, cache_media_ids
         )
 
+    def _effective_live_ttl(self) -> int:
+        """
+        Resolve the live-torrent freshness TTL to use for this check.
+
+        A recent episode (per is_recent_episode) uses the much shorter
+        RECENT_EPISODE_TORRENT_CACHE_TTL instead of LIVE_TORRENT_CACHE_TTL, so
+        a thin pre-air/air-minute scrape can't be treated as "fresh" for the
+        full live TTL over release night. The -1 = never-expires semantics of
+        the base TTL are preserved for the non-recent path; a recent episode
+        always gets the shorter TTL even if the base never expires.
+        """
+        base = settings.LIVE_TORRENT_CACHE_TTL
+        if is_recent_episode(self.target_air_date):
+            recent_ttl = settings.RECENT_EPISODE_TORRENT_CACHE_TTL
+            logger.log(
+                "SCRAPER",
+                f"⏱️ Recent episode (aired {self.target_air_date}): live torrent TTL {recent_ttl}s",
+            )
+            if base is not None and base >= 0:
+                return min(base, recent_ttl)
+            return recent_ttl
+        return base
+
     async def get_fresh_torrent_count(self) -> int:
         """
-        Check for at least one 'fresh' cached torrent based on LIVE_TORRENT_CACHE_TTL.
+        Check for at least one 'fresh' cached torrent based on the effective
+        live torrent TTL (see _effective_live_ttl).
 
         Returns 1 if any fresh torrent exists, otherwise 0.
         If TTL is -1 (never expires), checks for any cached torrent.
         """
+        effective_ttl = self._effective_live_ttl()
         min_timestamp = None
-        if settings.LIVE_TORRENT_CACHE_TTL >= 0:
-            min_timestamp = time.time() - settings.LIVE_TORRENT_CACHE_TTL
+        if effective_ttl >= 0:
+            min_timestamp = time.time() - effective_ttl
 
         if not self.cache_media_ids:
             return 0
@@ -226,6 +292,15 @@ class CacheStateManager:
         if not has_cached:
             return CacheState.EMPTY
 
+        threshold = settings.RECENT_EPISODE_THIN_CACHE_THRESHOLD
+        if (
+            not has_fresh
+            and threshold is not None
+            and torrent_count < threshold
+            and is_recent_episode(self.target_air_date)
+        ):
+            return CacheState.THIN_RECENT
+
         if is_first:
             return CacheState.FIRST_SEARCH
 
@@ -246,6 +321,9 @@ class CacheStateManager:
         - FRESH: Always use cache, no scraping needed
         - STALE: Use cache now, refresh in background
         - FIRST_SEARCH: Use cache now, enrich in background
+        - THIN_RECENT + lock acquired: Scrape now (foreground)
+        - THIN_RECENT + no lock: Use cache now, refresh in background (we do
+          have a cache to serve, unlike EMPTY, so don't make the caller wait)
         - EMPTY + lock acquired: Scrape now (foreground)
         - EMPTY + no lock: Another instance is scraping, wait
         """
@@ -253,6 +331,11 @@ class CacheStateManager:
             return ScrapeDecision.USE_CACHE
 
         if state in (CacheState.STALE, CacheState.FIRST_SEARCH):
+            return ScrapeDecision.SCRAPE_BACKGROUND
+
+        if state == CacheState.THIN_RECENT:
+            if lock_acquired:
+                return ScrapeDecision.SCRAPE_FOREGROUND
             return ScrapeDecision.SCRAPE_BACKGROUND
 
         # state == CacheState.EMPTY
@@ -279,9 +362,14 @@ class CacheStateManager:
         state = self._determine_state(fresh_count, torrent_count, is_first)
 
         lock_acquired = False
-        if state in (CacheState.EMPTY, CacheState.STALE, CacheState.FIRST_SEARCH):
+        if state in (
+            CacheState.EMPTY,
+            CacheState.STALE,
+            CacheState.FIRST_SEARCH,
+            CacheState.THIN_RECENT,
+        ):
             # For STALE/FIRST_SEARCH, background task will acquire its own lock
-            if state == CacheState.EMPTY:
+            if state in (CacheState.EMPTY, CacheState.THIN_RECENT):
                 lock_acquired = await self._try_acquire_lock()
 
         decision = self._determine_decision(state, lock_acquired)

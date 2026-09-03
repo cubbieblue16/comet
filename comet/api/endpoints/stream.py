@@ -701,6 +701,7 @@ async def stream(
         search_episode=search_episode,
         search_season=search_season,
         cache_media_ids=cache_media_ids,
+        target_air_date=target_air_date,
     )
     cache_result = await cache_manager.check_and_decide(torrent_count)
     force_scrape_now = not primary_cached

@@ -275,6 +275,7 @@ async def _warm_next_episode(
             search_episode=next_episode,
             search_season=season,
             cache_media_ids=[media_only_id],
+            target_air_date=target_air_date,
         ).get_fresh_torrent_count()
         needs_scrape = fresh_count == 0
     if needs_scrape:
