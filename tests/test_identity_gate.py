@@ -33,13 +33,8 @@ def titles(items):
 def _fresh(monkeypatch):
     identity.reset_state()
     monkeypatch.setattr(settings, "IDENTITY_GATE_ENABLED", True)
-    monkeypatch.setattr(identity, "_load_local_index", _no_local)
     yield
     identity.reset_state()
-
-
-async def _no_local():
-    return {}
 
 
 class Catalog:
@@ -322,29 +317,6 @@ def test_setting_off_means_no_lookups(monkeypatch):
     assert cat.calls == []
 
 
-def test_local_index_positive_identification_without_network(monkeypatch):
-    cat = use(monkeypatch, Catalog())
-
-    async def local():
-        return {"ted lasso": {LASSO}, "ted": {TED}}
-
-    monkeypatch.setattr(identity, "_load_local_index", local)
-    out = run(gate().filter([T("Ted"), T("Ted Lasso")]))
-    assert titles(out) == ["Ted"]
-    assert cat.calls == []
-
-
-def test_local_index_same_id_or_failure_falls_through(monkeypatch):
-    cat = use(monkeypatch, Catalog({"Ted Lasso": [(LASSO, "Ted Lasso")]}))
-
-    async def boom():
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(identity, "_load_local_index", boom)
-    assert titles(run(gate().filter([T("Ted Lasso")]))) == []
-    assert cat.calls == ["Ted Lasso"]
-
-
 def test_rejection_is_logged(monkeypatch):
     use(monkeypatch, Catalog({"Ted Lasso": [(LASSO, "Ted Lasso")]}))
     seen = []
@@ -566,3 +538,97 @@ def test_uk_edition_is_not_kept_by_the_head_guard(monkeypatch):
     out = run(gate("The Office", media_id="tt0386676").filter(
         [T("The Office UK", "The.Office.UK.S01E01.720p.mkv")]))
     assert out == []
+
+
+# --- v3: the requested id anywhere in the search results keeps the release ---
+
+
+def test_requested_id_in_results_beats_exact_hit_gbbo(monkeypatch):
+    # The catalog lists the requested show next to a same-named series.
+    use(
+        monkeypatch,
+        Catalog(
+            {
+                "The Great British Bake Off": [
+                    ("tt1877368", "The Great British Baking Show"),
+                    ("tt4057258", "The Great British Bake Off: An Extra Slice"),
+                    ("tt50205220", "The Great British Bake Off"),
+                ]
+            }
+        ),
+    )
+    out = run(
+        gate("The Great British Baking Show", media_id="tt1877368").filter(
+            [T("The Great British Bake Off")]
+        )
+    )
+    assert titles(out) == ["The Great British Bake Off"]
+
+
+def test_requested_id_in_results_beats_exact_hit_sherlok(monkeypatch):
+    use(
+        monkeypatch,
+        Catalog(
+            {
+                "Sherlok": [
+                    ("tt5338678", "Sherlok"),
+                    ("tt1475582", "Sherlock"),
+                    ("tt2465266", "Sherlock Holmes"),
+                ]
+            }
+        ),
+    )
+    out = run(gate("Sherlock", media_id="tt1475582").filter([T("Sherlok")]))
+    assert titles(out) == ["Sherlok"]
+
+
+def test_ted_lasso_and_father_ted_still_rejected_under_ted(monkeypatch):
+    use(
+        monkeypatch,
+        Catalog(
+            {
+                "Ted Lasso": [(LASSO, "Ted Lasso")],
+                "Father Ted": [("tt0111958", "Father Ted")],
+                "Better Off Ted": [
+                    ("tt1235547", "Better Off Ted"),
+                    ("tt37157708", "Better Off Dead"),
+                ],
+            }
+        ),
+    )
+    out = run(
+        gate().filter([T("Ted Lasso"), T("Father Ted"), T("Better Off Ted"), T("Ted")])
+    )
+    assert titles(out) == ["Ted"]
+
+
+def test_one_cached_title_two_requested_ids(monkeypatch):
+    cat = use(
+        monkeypatch,
+        Catalog(
+            {
+                "Bake Off": [
+                    ("tt1877368", "The Great British Baking Show"),
+                    ("tt50205220", "Bake Off"),
+                ]
+            }
+        ),
+    )
+    # requested id absent from the list: exact hit has another id -> reject
+    assert titles(run(gate("Other", media_id="tt0000001").filter([T("Bake Off")]))) == []
+    # same cached lookup, requested id present in the list -> keep
+    out = run(gate("Baking Show", media_id="tt1877368").filter([T("Bake Off")]))
+    assert titles(out) == ["Bake Off"]
+    # and the exact-hit show itself keeps
+    out = run(gate("Bake Off X", media_id="tt50205220").filter([T("Bake Off")]))
+    assert titles(out) == ["Bake Off"]
+    assert cat.calls == ["Bake Off"]  # one lookup served three requests
+
+
+def test_cache_entry_is_compact(monkeypatch):
+    use(monkeypatch, Catalog({"Ted Lasso": [(LASSO, "Ted Lasso"), ("tt1", "Other")]}))
+    run(gate().filter([T("Ted Lasso")]))
+    expires, entry = identity._cache["ted lasso"]
+    exact, ids = entry
+    assert exact == ((LASSO, "Ted Lasso"),)
+    assert set(ids) == {LASSO, "tt1"}

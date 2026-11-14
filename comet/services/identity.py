@@ -18,7 +18,7 @@ from urllib.parse import quote
 import aiohttp
 
 from comet.core.logger import logger
-from comet.core.models import database, settings
+from comet.core.models import settings
 from comet.services.filtering import _log_exclusion, scrub
 from comet.utils.http_client import http_client_manager
 
@@ -41,20 +41,15 @@ MAX_TITLE_LEN = 120
 _POSITIVE_TTL = 30 * 86400
 _NEGATIVE_TTL = 7 * 86400
 _CACHE_MAX = 20000
-_LOCAL_INDEX_TTL = 600
 
-# scrubbed title -> (expires_at, ((imdb_id, name), ...) exact-name hits)
+# scrubbed title -> (expires_at, (exact-name hits ((imdb_id, name), ...), every
+# imdb id the search returned)). The decision is made per requested id.
 _cache: "OrderedDict[str, tuple[float, tuple]]" = OrderedDict()
-_local_index: dict = {}
-_local_index_at: float = 0.0
 
 
 def reset_state():
     """Clear the process-wide caches (tests)."""
-    global _local_index, _local_index_at
     _cache.clear()
-    _local_index = {}
-    _local_index_at = 0.0
 
 
 def _no_article(key: str) -> str:
@@ -104,9 +99,9 @@ def _cache_get(key: str):
     return entry[1]
 
 
-def _cache_put(key: str, hits: tuple):
-    ttl = _POSITIVE_TTL if hits else _NEGATIVE_TTL
-    _cache[key] = (time.time() + ttl, hits)
+def _cache_put(key: str, entry: tuple):
+    ttl = _POSITIVE_TTL if entry[0] else _NEGATIVE_TTL
+    _cache[key] = (time.time() + ttl, entry)
     _cache.move_to_end(key)
     while len(_cache) > _CACHE_MAX:
         _cache.popitem(last=False)
@@ -138,43 +133,6 @@ async def _fetch_cinemeta(title: str) -> list[tuple[str, str]]:
         ):
             hits.append((imdb_id, name))
     return hits
-
-
-async def _load_local_index() -> dict:
-    """scrubbed series title -> {imdb ids}, from Comet's own metadata cache.
-
-    Titles live under ``imdb:tt<id>`` keys for movies and series alike (scrapers
-    also leave season-scoped rows under movie ids), so only ids present in
-    ``series_episode_index`` count: a movie must never identify a series.
-    """
-    rows = await database.fetch_all(
-        "SELECT m.media_id, m.title FROM media_metadata_cache m "
-        "WHERE m.title IS NOT NULL AND m.media_id LIKE 'imdb:tt%' "
-        "AND EXISTS (SELECT 1 FROM series_episode_index s "
-        "WHERE s.series_id = SUBSTR(m.media_id, 6))"
-    )
-    index: dict[str, set] = {}
-    for row in rows:
-        base = str(row["media_id"])[5:]
-        if not _IMDB_ID.fullmatch(base):
-            continue
-        key = scrub(row["title"])
-        if key:
-            index.setdefault(key, set()).add(base)
-    return index
-
-
-async def _get_local_index() -> dict:
-    global _local_index, _local_index_at
-    now = time.time()
-    if now - _local_index_at < _LOCAL_INDEX_TTL:
-        return _local_index
-    try:
-        _local_index = await _load_local_index()
-    except Exception:
-        pass  # keep the previous index (or empty): the network lookup still runs
-    _local_index_at = now
-    return _local_index
 
 
 class IdentityGate:
@@ -224,10 +182,16 @@ class IdentityGate:
             and _IMDB_ID.fullmatch(self.media_id)
         )
 
-    def _verdict(self, key: str, hits) -> tuple[str, str] | None:
-        """(imdb_id, name) of the other series, or None (keep)."""
-        exact = [(i, n) for i, n in hits if scrub(n) == key]
-        if not exact or any(i == self.media_id for i, _ in exact):
+    def _verdict(self, key: str, entry) -> tuple[str, str] | None:
+        """(imdb_id, name) of the other series, or None (keep).
+
+        Reject only on an exact-name hit with a different id AND the requested
+        id absent from the whole result list: when the catalog returns the
+        requested show for this title at all, it links the two."""
+        exact, ids = entry
+        if not exact or self.media_id in ids:
+            return None
+        if any(i == self.media_id for i, _ in exact):
             return None
         return exact[0]
 
@@ -238,7 +202,8 @@ class IdentityGate:
             )
         except Exception:
             return  # failures are never cached and never reject
-        _cache_put(key, tuple((i, n) for i, n in hits if scrub(n) == key))
+        exact = tuple((i, n) for i, n in hits if scrub(n) == key)
+        _cache_put(key, (exact, tuple(dict.fromkeys(i for i, _ in hits))))
 
     async def filter(self, items):
         items = list(items)
@@ -277,16 +242,10 @@ class IdentityGate:
 
         verdicts: dict[str, tuple[str, str] | None] = {}
         pending: list[str] = []
-        local = await _get_local_index()
         for key in groups:
-            ids = local.get(key)
-            if ids and self.media_id not in ids:
-                other = sorted(ids)[0]
-                verdicts[key] = (other, raw[key])
-                continue
-            hits = _cache_get(key)
-            if hits is not None:
-                verdicts[key] = self._verdict(key, hits)
+            entry = _cache_get(key)
+            if entry is not None:
+                verdicts[key] = self._verdict(key, entry)
             elif len(raw[key]) <= MAX_TITLE_LEN:
                 pending.append(key)
 
@@ -312,9 +271,9 @@ class IdentityGate:
                 if not task.done():
                     task.cancel()
             for key in chosen:
-                hits = _cache_get(key)
-                if hits is not None:
-                    verdicts[key] = self._verdict(key, hits)
+                entry = _cache_get(key)
+                if entry is not None:
+                    verdicts[key] = self._verdict(key, entry)
 
         rejected = {k: v for k, v in verdicts.items() if v is not None}
         if not rejected:
