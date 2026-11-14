@@ -104,16 +104,19 @@ async def _fetch_cinemeta(title: str) -> list[tuple[str, str]]:
 async def _load_local_index() -> dict:
     """scrubbed series title -> {imdb ids}, from Comet's own metadata cache.
 
-    Series rows are keyed ``tt<id>:<season>:<episode>``; plain ``tt`` keys are
-    movies and are skipped so a movie never identifies a series.
+    Titles live under ``imdb:tt<id>`` keys for movies and series alike, so only
+    ids that also hold season-scoped torrent rows count (a movie must never
+    identify a series).
     """
     rows = await database.fetch_all(
-        "SELECT media_id, title FROM media_metadata_cache "
-        "WHERE title IS NOT NULL AND media_id LIKE 'tt%:%'"
+        "SELECT m.media_id, m.title FROM media_metadata_cache m "
+        "WHERE m.title IS NOT NULL AND m.media_id LIKE 'imdb:tt%' "
+        "AND EXISTS (SELECT 1 FROM torrents t "
+        "WHERE t.media_id = SUBSTR(m.media_id, 6) AND t.season_norm <> -1)"
     )
     index: dict[str, set] = {}
     for row in rows:
-        base = str(row["media_id"]).split(":", 1)[0]
+        base = str(row["media_id"])[5:]
         if not _IMDB_ID.fullmatch(base):
             continue
         key = scrub(row["title"])
