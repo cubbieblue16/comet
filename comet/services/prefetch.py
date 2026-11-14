@@ -123,7 +123,7 @@ async def _ensure_played_hash_candidate(
 
     parsed = ParsedData(**orjson.loads(row["parsed_json"]))
     ensure_multi_language(parsed)
-    torrent_manager.torrents[played_hash] = {
+    candidate = {
         # fileIndex deliberately None: any cached index belongs to the episode
         # just played, not N+1. The availability check fills the at-scope
         # index; link-gen resolves by season/episode if it stays unknown.
@@ -135,6 +135,11 @@ async def _ensure_played_hash_candidate(
         "sources": orjson.loads(row["sources_json"]) if row["sources_json"] else [],
         "parsed": parsed,
     }
+    # A hash already rejected as another series must not come back through here.
+    identity_filter = getattr(torrent_manager, "_identity_filter", None)
+    if identity_filter is not None and not await identity_filter([candidate]):
+        return
+    torrent_manager.torrents[played_hash] = candidate
     logger.log(
         "SCRAPER",
         f"🔮 Prefetch: injected played hash {played_hash[:8]} from torrents "

@@ -201,6 +201,9 @@ class AppSettings(BaseSettings):
     REMOVE_ADULT_CONTENT: Optional[bool] = False
     PERMISSIVE_RANKING: Optional[bool] = True
     PERMISSIVE_EPISODE_MATCHING: Optional[bool] = True
+    # Reject releases whose parsed show name is positively identified (catalog
+    # lookup, exact name, different IMDb id) as a different series. Fails open.
+    IDENTITY_GATE_ENABLED: Optional[bool] = True
     AUTO_SCRAPE_DEBRID_ACCOUNT: Optional[bool] = False
     ENABLE_TMDB_IDS: Optional[bool] = True
     # JSON mapping of TMDB IDs to IMDB IDs, used when TMDB itself has no

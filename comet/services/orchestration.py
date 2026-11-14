@@ -10,6 +10,7 @@ from comet.core.models import CometSettingsModel, database, settings
 from comet.scrapers.manager import scraper_manager
 from comet.scrapers.models import ScrapeRequest
 from comet.services.filtering import filter_worker
+from comet.services.identity import IdentityGate
 from comet.services.ranking import rank_worker
 from comet.services.torrent_manager import torrent_update_queue
 from comet.utils.media_ids import normalize_cache_media_ids
@@ -64,11 +65,23 @@ class TorrentManager:
 
         self.date_resolver = date_resolver
 
+        self.identity_gate = IdentityGate(
+            title, aliases, media_only_id, media_type, is_kitsu
+        )
+
         self.seen_hashes = set()
         self.torrents = {}
         self.ready_to_cache = []
         self.ranked_torrents = {}
         self.primary_cached = False
+
+    async def _identity_filter(self, torrents: list) -> list:
+        """Drop releases positively identified as another series (fail open)."""
+        try:
+            return await self.identity_gate.filter(torrents)
+        except Exception as exc:
+            logger.warning(f"Identity gate error, keeping all torrents: {exc!r}")
+            return torrents
 
     def _matches_requested_scope(
         self,
@@ -200,6 +213,7 @@ class TorrentManager:
 
             rows = list(best_rows.values())
 
+        loaded = {}
         for row in rows:
             parsed_data = ParsedData(**orjson.loads(row["parsed_json"]))
             ensure_multi_language(parsed_data)
@@ -242,7 +256,7 @@ class TorrentManager:
                 continue
 
             info_hash = row["info_hash"]
-            self.torrents[info_hash] = {
+            loaded[info_hash] = {
                 "fileIndex": row["file_index"],
                 "title": row["title"],
                 "seeders": row["seeders"],
@@ -251,6 +265,12 @@ class TorrentManager:
                 "sources": orjson.loads(row["sources_json"]),
                 "parsed": parsed_data,
             }
+
+        # Rows stored before the gate existed may belong to another series.
+        kept = {id(t) for t in await self._identity_filter(list(loaded.values()))}
+        for info_hash, torrent in loaded.items():
+            if id(torrent) in kept:
+                self.torrents[info_hash] = torrent
 
     def _append_cache_file_infos(self, file_infos: list[dict], torrent: dict):
         parsed = torrent["parsed"]
@@ -339,8 +359,10 @@ class TorrentManager:
             for i in range(0, len(new_torrents), chunk_size)
         ]
         results = await asyncio.gather(*tasks)
-        for result in results:
-            self.ready_to_cache.extend(result)
+        passed = [torrent for result in results for torrent in result]
+        # Drop releases positively identified as another series before they
+        # are cached or served. Fails open (see comet/services/identity.py).
+        self.ready_to_cache.extend(await self._identity_filter(passed))
 
     async def rank_torrents(
         self,
