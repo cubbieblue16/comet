@@ -24,6 +24,13 @@ from comet.utils.http_client import http_client_manager
 
 _CINEMETA_SEARCH_URL = "https://v3-cinemeta.strem.io/catalog/series/top/search={query}.json"
 _IMDB_ID = re.compile(r"tt\d+")
+_ARTICLE = re.compile(r"^(?:the|a|an) ")
+# first season/episode/year marker in a release name; the text before it is the
+# title head as the uploader wrote it
+_HEAD_END = re.compile(
+    r"(?<![a-z0-9])(?:s\d{1,2} ?e\d{1,3}|s\d{1,2}|\d{1,2}x\d{1,3}|season \d+|(?:19|20)\d{2})(?![a-z0-9])"
+)
+_COUNTRY = {"us"}  # the catalog default; UK/AU/... editions are other series
 
 MAX_LOOKUPS = 30
 CONCURRENCY = 8
@@ -48,6 +55,38 @@ def reset_state():
     _cache.clear()
     _local_index = {}
     _local_index_at = 0.0
+
+
+def _no_article(key: str) -> str:
+    return _ARTICLE.sub("", key, count=1)
+
+
+def _canon(key: str) -> str:
+    """Article-insensitive, with a trailing "usa" read as "us"."""
+    key = _no_article(key)
+    return key[:-1] if key.endswith(" usa") else key
+
+
+def _release_head(title) -> list[str]:
+    """Scrubbed title head of a release name (before season/episode/year) as
+    match candidates: the head itself and, when it ends in "us", the head
+    without it. A localized prefix in another script is ignored. [] when the
+    name has no season/episode/year marker."""
+    if not isinstance(title, str):
+        return []
+    text = re.sub(r"[._]+", " ", title).lower()
+    match = _HEAD_END.search(text)
+    if not match:
+        return []
+    words = scrub(text[: match.start()]).split()
+    while words and not words[0].isascii():
+        words.pop(0)
+    if not words:
+        return []
+    heads = [" ".join(words)]
+    if len(words) > 1 and words[-1] in _COUNTRY:
+        heads.append(" ".join(words[:-1]))
+    return heads
 
 
 def _log_rejection(msg: str):
@@ -104,15 +143,15 @@ async def _fetch_cinemeta(title: str) -> list[tuple[str, str]]:
 async def _load_local_index() -> dict:
     """scrubbed series title -> {imdb ids}, from Comet's own metadata cache.
 
-    Titles live under ``imdb:tt<id>`` keys for movies and series alike, so only
-    ids that also hold season-scoped torrent rows count (a movie must never
-    identify a series).
+    Titles live under ``imdb:tt<id>`` keys for movies and series alike (scrapers
+    also leave season-scoped rows under movie ids), so only ids present in
+    ``series_episode_index`` count: a movie must never identify a series.
     """
     rows = await database.fetch_all(
         "SELECT m.media_id, m.title FROM media_metadata_cache m "
         "WHERE m.title IS NOT NULL AND m.media_id LIKE 'imdb:tt%' "
-        "AND EXISTS (SELECT 1 FROM torrents t "
-        "WHERE t.media_id = SUBSTR(m.media_id, 6) AND t.season_norm <> -1)"
+        "AND EXISTS (SELECT 1 FROM series_episode_index s "
+        "WHERE s.series_id = SUBSTR(m.media_id, 6))"
     )
     index: dict[str, set] = {}
     for row in rows:
@@ -173,6 +212,7 @@ class IdentityGate:
                         if isinstance(name, str):
                             self.expected.add(scrub(name))
         self.expected.discard("")
+        self.expected_loose = {_canon(k) for k in self.expected}
 
     @property
     def enabled(self) -> bool:
@@ -219,6 +259,16 @@ class IdentityGate:
                 continue
             key = scrub(parsed_title)
             if not key or key in self.expected:
+                continue
+            # "Mentalist" for "The Mentalist": article-insensitive equality
+            if _canon(key) in self.expected_loose:
+                continue
+            # the release name itself leads with the requested title and the
+            # parser picked an episode title ("The Office (US) - S06E03 - The Promotion")
+            if any(
+                _canon(head) in self.expected_loose
+                for head in _release_head(item.get("title"))
+            ):
                 continue
             groups.setdefault(key, []).append(item)
             raw.setdefault(key, parsed_title)

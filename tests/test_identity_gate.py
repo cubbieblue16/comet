@@ -487,3 +487,82 @@ def test_prefetch_played_hash_cannot_resurrect_other_show(monkeypatch):
     monkeypatch.setattr(prefetch.database, "fetch_one", fake_fetch_one)
     run(prefetch._ensure_played_hash_candidate(tm, "abc", TED))
     assert "abc" not in tm.torrents
+
+
+# ---- guards that keep same-show releases out of the lookup ------------------
+
+
+def test_article_insensitive_title_is_not_looked_up(monkeypatch):
+    cat = use(monkeypatch, Catalog({"Mentalist": [("tt27712361", "Mentalist")]}))
+    items = [T("Mentalist", "Mentalist.s07e01.2014.AVC.WEB-DLRip.mp4")]
+    out = run(gate("The Mentalist", media_id="tt1196946").filter(items))
+    assert len(out) == 1 and cat.calls == []
+
+
+def test_article_guard_works_the_other_way(monkeypatch):
+    cat = use(monkeypatch, Catalog({"The Ring": [("tt0000001", "The Ring")]}))
+    out = run(gate("Ring", media_id="tt0000002").filter([T("The Ring")]))
+    assert len(out) == 1 and cat.calls == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "The Office (US) (2005) - S06E03 - The Promotion (1080p BluRay x265 LION).mkv",
+        "The.Office.US.S06E03.The.Promotion.1080p.BluRay.x265-LION.mkv",
+        "The Office - 6x03 - The Promotion.mkv",
+    ],
+)
+def test_episode_title_misparse_kept_when_release_leads_with_title(monkeypatch, raw):
+    cat = use(monkeypatch, Catalog({"The Promotion": [("tt9202932", "The Promotion")]}))
+    out = run(gate("The Office", media_id="tt0386676").filter([T("The Promotion", raw)]))
+    assert len(out) == 1 and cat.calls == []
+
+
+def test_release_head_guard_does_not_save_ted_lasso(monkeypatch):
+    # head "ted lasso" != "ted": the guard must not reopen the original bug
+    use(monkeypatch, Catalog({"Ted Lasso": [(LASSO, "Ted Lasso")]}))
+    raw = "Ted.Lasso.S02E08.1080p.WEB.h264-GRP.mkv"
+    assert run(gate().filter([T("Ted Lasso", raw)])) == []
+
+
+def test_release_head_guard_ignores_site_prefix_and_still_decides_by_catalog(monkeypatch):
+    use(monkeypatch, Catalog({"Preacher": [("tt5016504", "Preacher")]}))
+    out = run(gate("Reacher", media_id="tt9288030").filter(
+        [T("Preacher", "Preacher.S04E03.Degenerato.ITA.2160p.mkv")]))
+    assert out == []
+
+
+def test_release_head_helper():
+    h = identity._release_head
+    assert h("The Office (US) (2005) - S06E03 - X") == ["the office us", "the office"]
+    assert h("Tulsa King_S04E01_Co by udelal Dwight_.mkv") == ["tulsa king"]
+    assert h("Ted.2024.S01E01.1080p") == ["ted"]
+    assert h("The Office UK S01E01") == ["the office uk"]  # other editions stay distinct
+    assert h("no marker here") == []
+    assert h(None) == []
+
+
+def test_usa_and_us_are_the_same_edition(monkeypatch):
+    cat = use(monkeypatch, Catalog({"Love Island": [("tt4770018", "Love Island")]}))
+    out = run(gate("Love Island USA", media_id="tt9999999").filter(
+        [T("Love Island", "Love Island US S08E36 1080p WEB h264-EDITH")]))
+    assert len(out) == 1 and cat.calls == []
+    # the plain (UK) Love Island release is still identified and rejected
+    out = run(gate("Love Island USA", media_id="tt9999999").filter(
+        [T("Love Island", "Love.Island.S06E01.iNTERNAL.1080p.WEB.H264-GHOSTS")]))
+    assert out == []
+
+
+def test_localized_prefix_in_other_script_is_ignored(monkeypatch):
+    cat = use(monkeypatch, Catalog({"Reasons Why": [("tt32314582", "Reasons Why")]}))
+    out = run(gate("13 Reasons Why", media_id="tt1837492").filter(
+        [T("Reasons Why", "十三个原因.13.Reasons.Why.S01E07.WEB-HR.AAC.720P.x264.mp4")]))
+    assert len(out) == 1 and cat.calls == []
+
+
+def test_uk_edition_is_not_kept_by_the_head_guard(monkeypatch):
+    use(monkeypatch, Catalog({"The Office UK": [("tt0290978", "The Office UK")]}))
+    out = run(gate("The Office", media_id="tt0386676").filter(
+        [T("The Office UK", "The.Office.UK.S01E01.720p.mkv")]))
+    assert out == []
