@@ -162,6 +162,8 @@ class IdentityGate:
         self.budget = budget
         self.lookups = 0
         self.spent = 0.0
+        self.lookup_failures = 0
+        self._failure_logged = False
         self.expected = {scrub(title or "")}
         if isinstance(aliases, dict):
             for names in aliases.values():
@@ -200,8 +202,16 @@ class IdentityGate:
             hits = await asyncio.wait_for(
                 _fetch_cinemeta(raw_title), timeout=self.lookup_timeout
             )
-        except Exception:
-            return  # failures are never cached and never reject
+        except Exception as exc:
+            # failures are never cached and never reject
+            self.lookup_failures += 1
+            if not self._failure_logged:
+                self._failure_logged = True
+                logger.warning(
+                    f"Identity gate: catalog lookup failed for {self.title} "
+                    f"({self.media_id}), keeping torrents (fail open): {exc!r}"
+                )
+            return
         exact = tuple((i, n) for i, n in hits if scrub(n) == key)
         _cache_put(key, (exact, tuple(dict.fromkeys(i for i, _ in hits))))
 
